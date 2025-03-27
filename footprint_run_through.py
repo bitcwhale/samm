@@ -6,8 +6,6 @@ import datetime
 import os
 from sklearn.covariance import LedoitWolf
 
-# Define the data path in order to save the end result properly
-# data_path = r"C:\put\your\path\here\to\save\result\in\excell\file"
 
 # Define the base URL for loading files from GitHub
 base_url = "https://raw.githubusercontent.com/bitcwhale/samm/main/"
@@ -426,27 +424,6 @@ else:
     plt.grid()
     plt.show()
 
-# ------------------------------------
-# --- step 7: Save Results to Excel---
-# ------------------------------------
-
-    #output_file = os.path.join(data_path, 'portfolio_resultsCO2.xlsx')
-    #with pd.ExcelWriter(output_file) as writer:
-        #monthly_returns_df = pd.DataFrame({
-            'MVP_Return': portfolio_returns_df,
-            'MVP_50_Return': portfolio_returns_50_df,
-            'TE_50_Return': portfolio_returns_te_df,
-            'VWP_Return': value_weighted_returns_df
-        })
-        #monthly_returns_df.to_excel(writer, sheet_name='Monthly Returns')
-        
-        #metrics_df = pd.DataFrame([mvp_metrics, mvp_50_metrics, te_50_metrics, vwp_metrics], 
-                                 index=['MVP', 'MVP_50', 'TE_50', 'VWP'])
-        #metrics_df.to_excel(writer, sheet_name='Metrics')
-        
-        #carbon_footprints_df.to_excel(writer, sheet_name='Carbon Footprints')
-        
-        #CI_df.to_excel(writer, sheet_name='Carbon Intensity')
 
 # === Print Results ===
 
