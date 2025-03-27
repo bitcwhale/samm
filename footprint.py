@@ -9,7 +9,6 @@ from sklearn.covariance import LedoitWolf
 # Define the data path in order to save the end result properly
  data_path = r"C:\put\your\path\here\to\save\result\in\excell\file"
 
-# Define the base URL for loading files from GitHub
 base_url = "https://raw.githubusercontent.com/bitcwhale/samm/main/"
 
 # ------------------------------
