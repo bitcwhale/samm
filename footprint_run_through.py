@@ -6,8 +6,6 @@ import datetime
 import os
 from sklearn.covariance import LedoitWolf
 
-
-# Define the base URL for loading files from GitHub
 base_url = "https://raw.githubusercontent.com/bitcwhale/samm/main/"
 
 # ------------------------------
