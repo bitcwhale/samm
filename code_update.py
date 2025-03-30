@@ -48,7 +48,11 @@ date_columns = [col for col in us_stock_prices.columns
 us_stock_prices_cleaned = us_stock_prices.copy()
 us_market_cap_cleaned = us_market_cap.copy()
 
-# === Replace zeros with NaN and interpolate missing values ===
+# Convert to numeric, replacing non-numeric with NaN
+us_stock_prices_cleaned[date_columns] = us_stock_prices_cleaned[date_columns].apply(pd.to_numeric, errors='coerce')
+us_market_cap_cleaned[date_columns] = us_market_cap_cleaned[date_columns].apply(pd.to_numeric, errors='coerce')
+
+# Replace zeros with NaN and interpolate missing values
 us_stock_prices_cleaned[date_columns] = us_stock_prices_cleaned[date_columns].replace(0, np.nan)
 us_market_cap_cleaned[date_columns] = us_market_cap_cleaned[date_columns].replace(0, np.nan)
 us_stock_prices_cleaned[date_columns] = us_stock_prices_cleaned[date_columns].interpolate(
@@ -58,48 +62,46 @@ us_market_cap_cleaned[date_columns] = us_market_cap_cleaned[date_columns].interp
     method='linear', axis=1, limit_direction='both'
 )
 
-# De-fragment DataFrame to avoid PerformanceWarning
-us_stock_prices_cleaned = us_stock_prices_cleaned.copy()
+# Set index to 'NAME' early for consistency
+us_stock_prices_cleaned.set_index('NAME', inplace=True)
+us_market_cap_cleaned.set_index('NAME', inplace=True)
 
-# === Calculate monthly log returns ===
-monthly_log_returns = np.log(us_stock_prices_cleaned[date_columns] / 
-                             us_stock_prices_cleaned[date_columns].shift(1, axis=1))
-monthly_log_returns = monthly_log_returns.copy()  # De-fragment DataFrame
-monthly_log_returns['Company_Name'] = us_stock_prices_cleaned['NAME']
-monthly_log_returns = monthly_log_returns[['Company_Name'] + date_columns]
+# === Calculate monthly simple returns ===
+monthly_simple_returns = us_stock_prices_cleaned[date_columns].pct_change(axis=1)
 
-# === Replace NaN returns with row-wise averages ===
-return_cols = [col for col in monthly_log_returns.columns if col != 'Company_Name']
-row_means = monthly_log_returns[return_cols].apply(
-    lambda row: row.dropna().mean() if len(row.dropna()) > 0 else 0, axis=1
-)
-for idx in monthly_log_returns.index:
-    monthly_log_returns.loc[idx, return_cols] = monthly_log_returns.loc[idx, return_cols].fillna(row_means[idx])
+# Drop assets with fewer than 100 non-NaN returns
+min_returns = 100
+sufficient_data = monthly_simple_returns.count(axis=1) >= min_returns
+monthly_simple_returns = monthly_simple_returns.loc[sufficient_data]
 
-# === Set index for emissions, revenues, and annual market cap ===
+# Fill remaining NaNs with zeros
+monthly_simple_returns = monthly_simple_returns.fillna(0)
+
+# === Clean ESG data: convert to numeric and fill NaNs with zeros ===
 scope1_us.set_index('NAME', inplace=True)
 scope2_us.set_index('NAME', inplace=True)
 revenues_us.set_index('NAME', inplace=True)
 annual_market_cap_us.set_index('NAME', inplace=True)
 
-# === Define function to fill NaNs with row mean ===
-def fill_with_row_mean(df):
-    df = df.apply(pd.to_numeric, errors='coerce')
-    row_mean = df.mean(axis=1)
-    df_filled = df.apply(lambda row: row.fillna(row_mean[row.name]), axis=1)
-    return df_filled.fillna(0)
+# Convert ESG data to numeric, replacing non-numeric with NaN
+scope1_us = scope1_us.apply(pd.to_numeric, errors='coerce')
+scope2_us = scope2_us.apply(pd.to_numeric, errors='coerce')
+revenues_us = revenues_us.apply(pd.to_numeric, errors='coerce')
+annual_market_cap_us = annual_market_cap_us.apply(pd.to_numeric, errors='coerce')
 
-# === Apply fill_with_row_mean to emissions, revenues, and annual market cap ===
-scope1_us = fill_with_row_mean(scope1_us)
-scope2_us = fill_with_row_mean(scope2_us)
-revenues_us = fill_with_row_mean(revenues_us)
-annual_market_cap_us = fill_with_row_mean(annual_market_cap_us)
+# Fill NaNs with zeros
+scope1_us = scope1_us.fillna(0)
+scope2_us = scope2_us.fillna(0)
+revenues_us = revenues_us.fillna(0)
+annual_market_cap_us = annual_market_cap_us.fillna(0)
 
 # === Compute total emissions (Scope 1 + Scope 2) ===
 E_df = scope1_us + scope2_us
 
 # === Compute carbon intensity (CI_{i,Y} = E_{i,Y} / Rev_{i,Y}) ===
-CI_df = E_df / revenues_us
+# Prevent division by zero by replacing zeros in revenues with NaN
+revenues_us_safe = revenues_us.replace(0, np.nan)
+CI_df = E_df / revenues_us_safe
 CI_df = CI_df.replace([np.inf, -np.inf], 0).fillna(0)
 
 # === Ensure columns are strings for consistency ===
@@ -117,11 +119,9 @@ risk_free_rate = risk_free_rate_data['risk_free_rate'].reindex(date_columns, met
 # Step 2: Prepare Data for Optimization
 # ------------------------------
 
-monthly_log_returns.set_index('Company_Name', inplace=True)
-returns_transposed = monthly_log_returns.T
+# Transpose returns and market caps
+returns_transposed = monthly_simple_returns.T
 returns_transposed.index = pd.to_datetime(returns_transposed.index)
-
-us_market_cap_cleaned.set_index('NAME', inplace=True)
 market_caps_transposed = us_market_cap_cleaned[date_columns].T
 market_caps_transposed.index = pd.to_datetime(market_caps_transposed.index)
 
@@ -139,10 +139,7 @@ risk_free_rate = risk_free_rate.reindex(common_dates, method='ffill').fillna(0)
 # ------------------------------
 
 def construct_factors(returns, market_caps, revenues, risk_free_rate):
-    """
-    Constructs factors for the factor model (e.g., Fama-French factors).
-    Placeholder: Replace with actual factor construction logic.
-    """
+    """Constructs factors for the factor model (e.g., Fama-French factors)."""
     factors = pd.DataFrame(index=returns.index)
     factors['Mkt-RF'] = returns.mean(axis=1) - risk_free_rate  # Market excess return
     factors['SMB'] = returns.mean(axis=1) * 0.5  # Small Minus Big (example)
@@ -150,42 +147,31 @@ def construct_factors(returns, market_caps, revenues, risk_free_rate):
     return factors
 
 def compute_factor_cov_matrix(returns, factors):
-    """
-    Computes the covariance matrix based on returns and factors.
-    Placeholder: Replace with actual covariance computation logic.
-    """
+    """Computes the covariance matrix based on returns and factors."""
     cov_matrix = returns.cov()  # Simple covariance for demonstration
     companies = returns.columns
     return cov_matrix, companies
 
 def prepare_and_apply_factor_models(returns_transposed, market_caps_transposed, revenues_us, risk_free_rate):
-    """
-    Prepares data and applies factor models to compute covariance matrices for 1-factor and 3-factor models.
-    """
-    # Filter revenues_us to include only year columns (e.g., '2003', '2004', etc.)
+    """Prepares data and applies factor models to compute covariance matrices."""
     year_columns = [col for col in revenues_us.columns if str(col).isdigit() and len(str(col)) == 4]
-    revenues_us = revenues_us[year_columns]
+    revenues_us_subset = revenues_us[year_columns]
     
-    # Transpose and convert index to datetime
-    revenues_transposed = revenues_us.T
+    revenues_transposed = revenues_us_subset.T
     revenues_transposed.index = pd.to_datetime(revenues_transposed.index, format='%Y')
     revenues_transposed = revenues_transposed.reindex(returns_transposed.index, method='ffill').interpolate()
     
-    # Align common companies and dates
     common_companies = returns_transposed.columns.intersection(market_caps_transposed.columns).intersection(revenues_transposed.columns)
     common_dates = returns_transposed.index.intersection(market_caps_transposed.index)
     returns_aligned = returns_transposed.loc[common_dates, common_companies]
     market_caps_aligned = market_caps_transposed.loc[common_dates, common_companies]
     revenues_aligned = revenues_transposed.loc[common_dates, common_companies]
     
-    # Align risk-free rate
     risk_free_rate_aligned = risk_free_rate.reindex(returns_aligned.index, method='ffill').fillna(0)
     
-    # Compute factors
     factors_3 = construct_factors(returns_aligned, market_caps_aligned, revenues_aligned, risk_free_rate_aligned)
-    factors_1 = factors_3[['Mkt-RF']]  # 1-factor model uses only market excess return
+    factors_1 = factors_3[['Mkt-RF']]
     
-    # Compute covariance matrices
     cov_matrix_1, companies_1 = compute_factor_cov_matrix(returns_aligned, factors_1)
     cov_matrix_3, companies_3 = compute_factor_cov_matrix(returns_aligned, factors_3)
     
@@ -195,13 +181,13 @@ def prepare_and_apply_factor_models(returns_transposed, market_caps_transposed, 
     }
 
 # ------------------------------
-# Step 3: Define Portfolio Functions (Optimized)
+# Step 3: Define Portfolio Functions
 # ------------------------------
 
-def compute_mvp_weights(returns_window, factor_results=None, min_obs=60):
-    """
-    Compute minimum variance portfolio weights using factor models if provided, else fall back to Ledoit-Wolf.
-    """
+def compute_mvp_weights(returns_window, factor_results=None, min_obs=100):
+    """Compute minimum variance portfolio weights with complete data requirement."""
+    sufficient_data = returns_window.count() >= min_obs
+    returns_window = returns_window.loc[:, sufficient_data]
     valid_assets = returns_window.columns[returns_window.notna().all()]
     if len(valid_assets) < 2:
         return None
@@ -231,10 +217,12 @@ def compute_mvp_weights(returns_window, factor_results=None, min_obs=60):
                       bounds=bounds, constraints=constraints)
     return pd.Series(result.x, index=valid_assets) if result.success else None
 
-def compute_carbon_reduced_mvp_weights(returns_window, cf_target, E_Y, Cap_Y, min_obs=60):
-    """Compute MVP weights with carbon footprint constraint using pairwise covariance and Ledoit-Wolf shrinkage."""
-    cov_matrix_pairwise = returns_window.cov(min_periods=min_obs)
-    valid_assets = cov_matrix_pairwise.columns[cov_matrix_pairwise.notna().all(axis=0)]
+def compute_carbon_reduced_mvp_weights(returns_window, cf_target, E_Y, Cap_Y, min_obs=100):
+    """Compute MVP weights with carbon footprint constraint and complete data."""
+    sufficient_data = returns_window.count() >= min_obs
+    returns_window = returns_window.loc[:, sufficient_data]
+    valid_assets = returns_window.columns[returns_window.notna().all()]
+    valid_assets = valid_assets[E_Y[valid_assets].notna() & Cap_Y[valid_assets].notna()]
     if len(valid_assets) < 2:
         return None
     returns_valid = returns_window[valid_assets]
@@ -264,10 +252,12 @@ def compute_carbon_reduced_mvp_weights(returns_window, cf_target, E_Y, Cap_Y, mi
                       bounds=bounds, constraints=constraints)
     return pd.Series(result.x, index=valid_assets) if result.success else None
 
-def compute_tracking_error_weights(returns_window, vw_weights, cf_target, E_Y, Cap_Y, min_obs=60):
-    """Minimize tracking error with carbon footprint constraint using pairwise covariance and Ledoit-Wolf shrinkage."""
-    cov_matrix_pairwise = returns_window.cov(min_periods=min_obs)
-    valid_assets = cov_matrix_pairwise.columns[cov_matrix_pairwise.notna().all(axis=0)]
+def compute_tracking_error_weights(returns_window, vw_weights, cf_target, E_Y, Cap_Y, min_obs=100):
+    """Minimize tracking error with carbon footprint constraint and complete data."""
+    sufficient_data = returns_window.count() >= min_obs
+    returns_window = returns_window.loc[:, sufficient_data]
+    valid_assets = returns_window.columns[returns_window.notna().all()]
+    valid_assets = valid_assets[E_Y[valid_assets].notna() & Cap_Y[valid_assets].notna()]
     if len(valid_assets) < 2:
         return None
     returns_valid = returns_window[valid_assets]
@@ -330,9 +320,9 @@ else:
 for year in range(2013, 2023):
     start_date = pd.Timestamp(f'{year-9}-01-01')
     end_date = pd.Timestamp(f'{year}-12-31')
-    window_log_returns = returns_transposed.loc[start_date:end_date].dropna(axis=1, how='any')
+    window_returns = returns_transposed.loc[start_date:end_date]
     
-    if window_log_returns.empty:
+    if window_returns.empty:
         print(f"Skipping year {year} due to no data")
         continue
     
@@ -344,27 +334,27 @@ for year in range(2013, 2023):
     Cap_Y = annual_market_cap_us[Y_str]
     
     valid_firms = Cap_Y > 0
-    valid_firms_aligned = valid_firms.reindex(window_log_returns.columns, fill_value=False)
-    included_firms = window_log_returns.columns[valid_firms_aligned]
+    valid_firms_aligned = valid_firms.reindex(window_returns.columns, fill_value=False)
+    included_firms = window_returns.columns[valid_firms_aligned]
     
     if len(included_firms) == 0:
         print(f"No common firms with complete data for year {year}")
         continue
     
-    window_log_returns_selected = window_log_returns[included_firms]
+    window_returns_selected = window_returns[included_firms]
     E_Y_selected = E_Y[included_firms]
     Cap_Y_selected = Cap_Y[included_firms]
     
     # Compute factor models for the current window
     factor_results = prepare_and_apply_factor_models(
-        window_log_returns_selected,
+        window_returns_selected,
         market_caps_transposed.loc[start_date:end_date, included_firms],
         revenues_us.loc[included_firms],
         risk_free_rate[start_date:end_date]
     )
     
-    # === Compute MVP weights with factor models ===
-    weights_mvp = compute_mvp_weights(window_log_returns_selected, factor_results)
+    # === Compute MVP weights ===
+    weights_mvp = compute_mvp_weights(window_returns_selected, factor_results)
     if weights_mvp is None:
         print(f"MVP optimization failed for year {year}")
         continue
@@ -372,7 +362,7 @@ for year in range(2013, 2023):
     
     # === Compute MVP with 50% CF reduction ===
     cf_target_50 = 0.5 * CF_mvp
-    weights_mvp_50 = compute_carbon_reduced_mvp_weights(window_log_returns_selected, cf_target_50, E_Y_selected, Cap_Y_selected)
+    weights_mvp_50 = compute_carbon_reduced_mvp_weights(window_returns_selected, cf_target_50, E_Y_selected, Cap_Y_selected)
     if weights_mvp_50 is None:
         print(f"MVP 50% CF optimization failed for year {year}")
         continue
@@ -384,7 +374,7 @@ for year in range(2013, 2023):
     
     # === Compute tracking error minimized portfolio ===
     cf_target_te = 0.5 * CF_vw
-    weights_te = compute_tracking_error_weights(window_log_returns_selected, vw_weights, cf_target_te, E_Y_selected, Cap_Y_selected)
+    weights_te = compute_tracking_error_weights(window_returns_selected, vw_weights, cf_target_te, E_Y_selected, Cap_Y_selected)
     if weights_te is None:
         print(f"Tracking error optimization failed for year {year}")
         continue
@@ -399,15 +389,14 @@ for year in range(2013, 2023):
     # === Compute returns for the next year ===
     next_year_start = pd.Timestamp(f'{year+1}-01-01')
     next_year_end = pd.Timestamp(f'{year+1}-12-31')
-    next_year_log_returns = returns_transposed.loc[next_year_start:next_year_end]
+    next_year_returns = returns_transposed.loc[next_year_start:next_year_end]
     next_year_market_caps = market_caps_transposed.loc[next_year_start:next_year_end]
     
-    for date in next_year_log_returns.index:
-        monthly_log_returns_date = next_year_log_returns.loc[date].dropna()
-        if monthly_log_returns_date.empty:
+    for date in next_year_returns.index:
+        monthly_simple_returns = next_year_returns.loc[date].dropna()
+        if monthly_simple_returns.empty:
             continue
         
-        monthly_simple_returns = np.exp(monthly_log_returns_date) - 1
         common_companies = monthly_simple_returns.index.intersection(included_firms).intersection(next_year_market_caps.columns)
         monthly_simple_returns = monthly_simple_returns[common_companies]
         monthly_market_caps = next_year_market_caps.loc[date, common_companies]
