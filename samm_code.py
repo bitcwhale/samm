@@ -78,9 +78,16 @@ def compute_mvp_weights(returns_window, method='lw', max_weight=0.05, prev_weigh
         sigma_specific = np.var(X - factors @ loadings.T, axis=0)
         D = np.diag(sigma_specific)
         cov_matrix = loadings @ F @ loadings.T + D
+
+    elif method == 'identity':
+        sample_cov = np.cov(returns_window.values, rowvar=False)
+        avg_var = np.trace(sample_cov) / n
+        identity = np.eye(n) * avg_var
+        shrinkage_intensity = 0.2  # 👈 Tune this value (e.g., 0.1 to 0.5)
+        cov_matrix = (1 - shrinkage_intensity) * sample_cov + shrinkage_intensity * identity
     
     else:
-        raise ValueError("Method must be 'lw', 'pinv', or 'factor'.")
+        raise ValueError("Method must be 'lw','identity', 'pinv', or 'factor'.")
     
     # Optimization
     w = cp.Variable(n)
@@ -108,7 +115,7 @@ def compute_mvp_weights(returns_window, method='lw', max_weight=0.05, prev_weigh
 
 start_year = 2013
 end_year = 2023
-methods = ['lw', 'pinv', 'factor']
+methods = ['lw', 'pinv', 'factor','identity']
 mvp_weights_all = {}
 
 for method in methods:
