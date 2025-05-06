@@ -498,5 +498,105 @@ table.scale(1.2, 1.2)
 plt.title("Portfolio Performance Metrics", fontsize=14, pad=20)
 plt.tight_layout()
 plt.show()
+
+# ------------------------------
+# STEP 2.1 – CARBON METRICS FOR P_mv_oos
+# ------------------------------
+
+# 1) Build annual emissions DataFrame
+# (scope1_us and scope2_us are already filtered to your AMER + ESG set)
+em1 = scope1_us.melt(id_vars='ISIN',
+                     value_vars=[c for c in scope1_us.columns if str(c).isdigit()],
+                     var_name='Year', value_name='E1')
+em2 = scope2_us.melt(id_vars='ISIN',
+                     value_vars=[c for c in scope2_us.columns if str(c).isdigit()],
+                     var_name='Year', value_name='E2')
+emissions = (em1
+             .merge(em2, on=['ISIN','Year'])
+             .assign(Year=lambda df: df['Year'].astype(int),
+                     E=lambda df: df['E1'] + df['E2'])
+             .pivot(index='Year', columns='ISIN', values='E'))
+
+# 2) Build annual revenue DataFrame
+rev_ann = (revenues_long
+           .assign(Year=lambda df: df['Year'].astype(int))
+           .pivot(index='Year', columns='ISIN', values='Revenue'))
+
+# 3) Extract December market caps
+mktcaps_ann = mkt_caps[mkt_caps.index.month == 12]
+# map Year → the December row for that year
+mktcaps_ann.index = pd.to_datetime(mktcaps_ann.index).year
+
+# 4) Pick your Part I weights (e.g. Ledoit–Wolf)
+weights_mv = mvp_weights_all['lw']
+
+# 5) Compute WACI and CF each year
+years = list(range(2013, 2024))
+waci = {}
+cf   = {}
+
+for Y in years:
+    w = weights_mv.get(Y)
+    if w is None or w.empty:
+        waci[Y] = np.nan
+        cf[Y]   = np.nan
+        continue
+
+    # align to firms with data
+    common = (w.index
+                .intersection(emissions.columns)
+                .intersection(rev_ann.columns)
+                .intersection(mktcaps_ann.columns))
+    w = w[common]
+    
+    E = emissions.loc[Y, common]
+    R = rev_ann.loc[Y, common]
+    C = mktcaps_ann.loc[Y, common]
+    
+    #  a) carbon intensity per firm
+    CI = E / R
+    
+    #  b) weighted‐average carbon intensity
+    waci[Y] = (w * CI).sum()
+    
+    #  c) carbon footprint per $1 M invested
+    cf[Y] = (w * (E / C)).sum()
+
+# 6) Put into a DataFrame for inspection
+carbon_df = pd.DataFrame({
+    'WACI (tCO2 per MUSD)': pd.Series(waci),
+    'CF   (tCO2 per MUSD)': pd.Series(cf)
+})
+print("\n=== Carbon Metrics for P(mv)_oos (lw) ===")
+print(carbon_df)
+
+import matplotlib.pyplot as plt
+
+# assume carbon_df is indexed by Year and has the two columns
+fig, ax1 = plt.subplots(figsize=(10, 6))
+
+# Plot WACI on the left y–axis
+ax1.set_xlabel('Year')
+ax1.set_ylabel('WACI (tCO₂ per MUSD)', fontsize=12)
+ax1.plot(carbon_df.index, carbon_df['WACI (tCO2 per MUSD)'], marker='o', label='WACI',color='tab:red')
+ax1.tick_params(axis='y')
+ax1.grid(True, which='both', axis='x', linestyle='--', alpha=0.5)
+
+# Create a second y–axis sharing the same x–axis
+ax2 = ax1.twinx()
+ax2.set_ylabel('CF (tCO₂ per MUSD)', fontsize=12)
+ax2.plot(carbon_df.index, carbon_df['CF   (tCO2 per MUSD)'], marker='s', label='CF',color='tab:blue')
+ax2.tick_params(axis='y')
+
+# Combine legends from both axes
+lines_1, labels_1 = ax1.get_legend_handles_labels()
+lines_2, labels_2 = ax2.get_legend_handles_labels()
+ax1.legend(lines_1 + lines_2, labels_1 + labels_2, loc='upper left')
+
+plt.title('Portfolio Carbon Metrics Over Time', fontsize=14, pad=10)
+plt.tight_layout()
+plt.show()
+
+
 plt.show()
 
