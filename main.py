@@ -1,15 +1,18 @@
-import numpy as np
-import cvxpy as cp
-from sklearn.covariance import LedoitWolf
-from sklearn.decomposition import PCA
-import matplotlib.pyplot as plt
 import pandas as pd
+import numpy as np
+from scipy.optimize import minimize
+import matplotlib.pyplot as plt
+import datetime
+import os
+from sklearn.covariance import LedoitWolf
+import cvxpy as cp
+from sklearn.decomposition import PCA
 
 # Define base URL for GitHub raw data files
 base_url = "https://raw.githubusercontent.com/bitcwhale/samm/main/"
 
 # ------------------------------
-# **STEP 1 – LOAD AND CLEAN DATA**
+# STEP 1 – LOAD STATIC & ESG DATA
 # ------------------------------
 
 # Load static info and filter for AMER region
@@ -17,44 +20,51 @@ static_df = pd.read_excel(base_url + "Static.xlsx")
 amer_df = static_df[static_df["Region"] == "AMER"]
 amer_isins = set(amer_df["ISIN"].unique())
 
-# Load price data and transform
+# Load Scope 1 and Scope 2 emissions
+scope1_df = pd.read_excel(base_url + "Scope_1.xlsx")
+scope2_df = pd.read_excel(base_url + "Scope_2.xlsx")
+scope1_us = scope1_df[scope1_df["ISIN"].isin(amer_isins)]
+scope2_us = scope2_df[scope2_df["ISIN"].isin(amer_isins)]
+
+# Define ESG coverage check: ≥7 years & ≥5 consecutive years
+def check_scope(row):
+    values = row.iloc[2:].notna().astype(int)
+    valid_years = values.sum()
+    max_consecutive = values.groupby((values != values.shift()).cumsum()).transform('size') * values
+    consecutive_years = max_consecutive.max()
+    return (valid_years >= 7) and (consecutive_years >= 5)
+
+# Filter ISINs that meet both Scope 1 and Scope 2 criteria
+scope1_ok = set(scope1_us[scope1_us.apply(check_scope, axis=1)]["ISIN"])
+scope2_ok = set(scope2_us[scope2_us.apply(check_scope, axis=1)]["ISIN"])
+solid_isins = amer_isins & scope1_ok & scope2_ok
+
+# ------------------------------
+# STEP 2 – LOAD FINANCIAL DATA
+# ------------------------------
+
+# Load price data
 raw_prices = pd.read_excel(base_url + "DS_RI_T_USD_M.xlsx")
 prices = raw_prices.set_index("ISIN").transpose()
 prices.index = pd.to_datetime(prices.index, format="%Y-%m-%d", errors="coerce")
 
-# Load market cap data and transform
+# Load market cap data
 raw_mkt_caps = pd.read_excel(base_url + "DS_MV_T_USD_M.xlsx")
 mkt_caps = raw_mkt_caps.set_index("ISIN").transpose()
 mkt_caps.index = pd.to_datetime(mkt_caps.index, format="%Y-%m-%d", errors="coerce")
 
-# Load revenue data (assuming you have this file)
-# Load raw revenue data
+# Load and transform revenue data
 raw_revenues = pd.read_excel(base_url + "DS_REV_USD_Y.xlsx")
-
-# Step 1: Identify the year columns
 year_cols = [col for col in raw_revenues.columns if str(col).isdigit()]
-
-# Step 2: Melt to long format
 revenues_long = raw_revenues.melt(
-    id_vars=["ISIN"],                  # Use ISIN to track companies
-    value_vars=year_cols,             # Only melt year columns
+    id_vars=["ISIN"],
+    value_vars=year_cols,
     var_name="Year",
     value_name="Revenue"
 )
-
-# Step 3: Convert to end-of-year date
 revenues_long["Date"] = pd.to_datetime(revenues_long["Year"], format="%Y") + pd.offsets.YearEnd(0)
-
-# Step 4: Pivot to wide format: index = date, columns = ISINs
 revenues = revenues_long.pivot(index="Date", columns="ISIN", values="Revenue")
-
-# Step 5: Resample to monthly frequency (forward fill from year-end)
 revenues = revenues.resample("M").ffill()
-
-# Optional: Diagnostic check
-print("✅ Revenue data processed.")
-print("Shape:", revenues.shape)
-print("Sample:\n", revenues.iloc[:5, :5])
 
 # Load risk-free rate
 rf_df = pd.read_excel(base_url + "Risk_Free_Rate.xlsx")
@@ -63,20 +73,31 @@ rf_df["Date"] = pd.to_datetime(rf_df["DateRaw"].astype(str), format="%Y%m")
 rf_df.set_index("Date", inplace=True)
 rf_series = rf_df["RF"] / 100
 
-# Align data to common ISINs
-common_isins = amer_isins & set(prices.columns) & set(mkt_caps.columns) & set(revenues.columns)
+# ------------------------------
+# STEP 3 – ALIGN AND CLEAN DATA
+# ------------------------------
+
+# Filter data to companies that passed ESG screen
+common_isins = solid_isins & set(prices.columns) & set(mkt_caps.columns) & set(revenues.columns)
 prices = prices[list(common_isins)]
 mkt_caps = mkt_caps[list(common_isins)]
 revenues = revenues[list(common_isins)]
 
-# Clean data
-prices = prices.replace(0, np.nan).apply(pd.to_numeric, errors="coerce").interpolate(method="linear", axis=0,
-                                                                                     limit_direction="both")
-mkt_caps = mkt_caps.apply(pd.to_numeric, errors="coerce").interpolate(method="linear", axis=0, limit_direction="both")
-revenues = revenues.apply(pd.to_numeric, errors="coerce").ffill(limit=11)
+# Clean: interpolate linearly, internally only
+prices = prices.replace(0, np.nan).apply(pd.to_numeric, errors="coerce")
+prices = prices.interpolate(method="linear", axis=0, limit_area="inside")
 
+mkt_caps = mkt_caps.replace(0, np.nan).apply(pd.to_numeric, errors="coerce")
+mkt_caps = mkt_caps.interpolate(method="linear", axis=0, limit_area="inside")
+
+revenues = revenues.replace(0, np.nan).apply(pd.to_numeric, errors="coerce")
+revenues = revenues.interpolate(method="linear", axis=0, limit_area="inside")
+
+# Diagnostics
+print("✅ Data loading and ESG filtering complete.")
+print(f"Remaining ISINs after ESG filter: {len(common_isins)}")
 # Calculate simple returns
-simple_returns = prices.pct_change()
+simple_returns = prices.pct_change(fill_method=None)
 first_available = simple_returns.notna().apply(lambda x: x[x].index.min())
 
 
@@ -476,5 +497,6 @@ table.scale(1.2, 1.2)
 
 plt.title("Portfolio Performance Metrics", fontsize=14, pad=20)
 plt.tight_layout()
+plt.show()
 plt.show()
 
