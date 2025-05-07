@@ -519,7 +519,8 @@ emissions = (em1
 
 # 2) Build annual revenue DataFrame
 rev_ann = (revenues_long
-           .assign(Year=lambda df: df['Year'].astype(int))
+           .assign(Year=lambda df: df['Year'].astype(int),
+                   Revenue=lambda df: pd.to_numeric(df['Revenue'], errors='coerce') / 1_000)  # Convert to numeric, then USD to MUSD
            .pivot(index='Year', columns='ISIN', values='Revenue'))
 
 # 3) Extract December market caps
@@ -578,14 +579,14 @@ fig, ax1 = plt.subplots(figsize=(10, 6))
 # Plot WACI on the left y–axis
 ax1.set_xlabel('Year')
 ax1.set_ylabel('WACI (tCO₂ per MUSD)', fontsize=12)
-ax1.plot(carbon_df.index, carbon_df['WACI (tCO2 per MUSD)'], marker='o', label='WACI',color='tab:red')
+ax1.plot(carbon_df.index, carbon_df['WACI (tCO2 per MUSD)'], marker='o', label='WACI', color='tab:red')
 ax1.tick_params(axis='y')
 ax1.grid(True, which='both', axis='x', linestyle='--', alpha=0.5)
 
 # Create a second y–axis sharing the same x–axis
 ax2 = ax1.twinx()
 ax2.set_ylabel('CF (tCO₂ per MUSD)', fontsize=12)
-ax2.plot(carbon_df.index, carbon_df['CF   (tCO2 per MUSD)'], marker='s', label='CF',color='tab:blue')
+ax2.plot(carbon_df.index, carbon_df['CF   (tCO2 per MUSD)'], marker='s', label='CF', color='tab:blue')
 ax2.tick_params(axis='y')
 
 # Combine legends from both axes
@@ -596,7 +597,3 @@ ax1.legend(lines_1 + lines_2, labels_1 + labels_2, loc='upper left')
 plt.title('Portfolio Carbon Metrics Over Time', fontsize=14, pad=10)
 plt.tight_layout()
 plt.show()
-
-
-plt.show()
-
