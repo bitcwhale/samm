@@ -1042,3 +1042,108 @@ plt.grid(True)
 plt.legend()
 plt.tight_layout()
 plt.show()
+
+
+
+# ------------------------------
+# STEP 13 – COMPARAISON ANALYSIS 50% CARBON FOOTPRINT REDUCTION (2.4)
+# ------------------------------
+
+
+# Align risk-free rate with portfolio returns
+rf_aligned_mv = rf_series.reindex(mvp_series_all['lw'].index, method="ffill")
+rf_aligned_mv_constr = rf_series.reindex(mvp_series_constrained.index, method="ffill")
+rf_aligned_vw = rf_series.reindex(vw_series.index, method="ffill")
+rf_aligned_track = rf_series.reindex(tracking_series.index, method="ffill")
+
+# Function to compute performance metrics (reused from previous code)
+def compute_metrics(r, rf):
+    r, rf = r.dropna(), rf.dropna()
+    aligned_dates = r.index.intersection(rf.index)
+    r, rf = r.loc[aligned_dates], rf.loc[aligned_dates]
+    if len(r) == 0:
+        return [np.nan] * 7
+    excess_r = r - rf
+    n_months = len(r)
+    ann_avg_ret = (1 + r).prod() ** (12 / n_months) - 1
+    ann_vol = r.std() * np.sqrt(12)
+    sharpe = excess_r.mean() / r.std() * np.sqrt(12) if r.std() != 0 else np.nan
+    rmin, rmax = r.min(), r.max()
+    cumulative_return = (1 + r).prod() - 1
+    cum_series = (1 + r).cumprod()
+    drawdown = (cum_series - cum_series.cummax()) / cum_series.cummax()
+    max_drawdown = drawdown.min()
+    return ann_avg_ret, ann_vol, cumulative_return, sharpe, rmin, rmax, max_drawdown
+
+# Compute metrics for all four portfolios
+metric_names = ["Annualized Return", "Annualized Volatility", "Cumulative Return",
+                "Sharpe Ratio", "Min Monthly Return", "Max Monthly Return", "Max Drawdown"]
+metrics_mv = compute_metrics(mvp_series_all['lw'], rf_aligned_mv)
+metrics_mv_constr = compute_metrics(mvp_series_constrained, rf_aligned_mv_constr)
+metrics_vw = compute_metrics(vw_series, rf_aligned_vw)
+metrics_track = compute_metrics(tracking_series, rf_aligned_track)
+
+# Create metrics DataFrame
+metrics_dict = {
+    "P_oos^(mv)": metrics_mv,
+    "P_oos^(mv)(0.5)": metrics_mv_constr,
+    "P^(vw)": metrics_vw,
+    "P_oos^(vw)(0.5)": metrics_track
+}
+metrics_df = pd.DataFrame.from_dict(metrics_dict, orient='index', columns=metric_names)
+
+# Display financial performance comparison
+print("\n=== Financial Performance Comparison (2014–2024) ===")
+print(metrics_df.to_string(formatters={k: "{:.4f}".format for k in metric_names}))
+
+# Carbon footprint comparison DataFrames
+cf_mv_df = pd.DataFrame({
+    "P_oos^(mv)": carbon_footprints_original,
+    "P_oos^(mv)(0.5)": carbon_footprints_constrained
+}).dropna()
+cf_mv_df["Ratio"] = cf_mv_df["P_oos^(mv)(0.5)"] / cf_mv_df["P_oos^(mv)"]
+
+cf_vw_df = pd.DataFrame({
+    "P^(vw)": benchmark_cf,
+    "P_oos^(vw)(0.5)": carbon_footprints_tracking
+}).dropna()
+cf_vw_df["Ratio"] = cf_vw_df["P_oos^(vw)(0.5)"] / cf_vw_df["P^(vw)"]
+
+# Display carbon footprint comparisons
+print("\n=== Carbon Footprint Comparison: P_oos^(mv) vs P_oos^(mv)(0.5) ===")
+print(cf_mv_df.to_string(formatters={"P_oos^(mv)": "{:.2f}".format,
+                                     "P_oos^(mv)(0.5)": "{:.2f}".format,
+                                     "Ratio": "{:.2f}".format}))
+
+print("\n=== Carbon Footprint Comparison: P^(vw) vs P_oos^(vw)(0.5) ===")
+print(cf_vw_df.to_string(formatters={"P^(vw)": "{:.2f}".format,
+                                     "P_oos^(vw)(0.5)": "{:.2f}".format,
+                                     "Ratio": "{:.2f}".format}))
+
+# Plot cumulative returns for both pairs
+plt.figure(figsize=(12, 6))
+(1 + mvp_series_all['lw']).cumprod().plot(label="P_oos^(mv)")
+(1 + mvp_series_constrained).cumprod().plot(label="P_oos^(mv)(0.5)")
+(1 + vw_series).cumprod().plot(label="P^(vw)")
+(1 + tracking_series).cumprod().plot(label="P_oos^(vw)(0.5)")
+plt.title("Cumulative Returns Comparison (2014–2024)")
+plt.xlabel("Date")
+plt.ylabel("Portfolio Value")
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+# Plot carbon footprints for both pairs
+plt.figure(figsize=(12, 6))
+plt.plot(cf_mv_df.index, cf_mv_df["P_oos^(mv)"], marker='o', label="P_oos^(mv) CF")
+plt.plot(cf_mv_df.index, cf_mv_df["P_oos^(mv)(0.5)"], marker='s', label="P_oos^(mv)(0.5) CF")
+plt.plot(cf_vw_df.index, cf_vw_df["P^(vw)"], marker='^', label="P^(vw) CF")
+plt.plot(cf_vw_df.index, cf_vw_df["P_oos^(vw)(0.5)"], marker='d', label="P_oos^(vw)(0.5) CF")
+plt.title("Carbon Footprint Comparison (2014–2023)")
+plt.xlabel("Year")
+plt.ylabel("Carbon Footprint (tons CO2e per million USD)")
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
