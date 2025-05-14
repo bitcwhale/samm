@@ -1147,3 +1147,183 @@ plt.grid(True)
 plt.legend()
 plt.tight_layout()
 plt.show()
+
+# ------------------------------
+# STEP 15 – NET ZERO PORTFOLIO (3.1)
+# ------------------------------
+
+# Base year and reduction rate
+Y0 = 2013
+theta = 0.10  # 10% annual reduction
+
+# Compute base year carbon footprint for the benchmark (P^(vw))
+emissions_Y0 = emissions_long[emissions_long['Year'] == Y0].set_index('Firm_Name')['E']
+if Y0 not in mkt_caps_annual.index:
+    raise ValueError(f"No market cap data for base year {Y0}")
+mkt_cap_Y0 = mkt_caps_annual.loc[Y0]
+common_firms_Y0 = emissions_Y0.index.intersection(mkt_cap_Y0.index)
+emissions_Y0 = emissions_Y0.reindex(common_firms_Y0)
+total_cap_Y0 = mkt_cap_Y0.reindex(common_firms_Y0).sum()
+CF_Y0_vw = emissions_Y0.sum() / total_cap_Y0 if total_cap_Y0 != 0 else np.nan
+print(f"Base Year (2013) Benchmark Carbon Footprint: {CF_Y0_vw:.2f} tons CO2e per million USD")
+
+# Function to compute annual Net Zero carbon footprint targets
+def compute_nz_target(Y, CF_Y0, theta):
+    return (1 - theta) ** (Y - Y0 + 1) * CF_Y0
+
+# Initialize metrics dictionary if not already defined
+metrics = {} if 'metrics' not in globals() else metrics
+
+# Rolling optimization for Net Zero portfolio
+nz_weights = {}
+method = 'lw'  # Using Ledoit-Wolf covariance estimation
+start_year = 2013
+end_year = 2023
+
+for year in range(start_year, end_year + 1):
+    # Define 10-year lookback window for covariance estimation
+    window_start = pd.Timestamp(f"{year - 10}-01-01")
+    window_end = pd.Timestamp(f"{year - 1}-12-31")
+    eligible_assets = first_available[first_available <= window_start].index
+    returns_window = simple_returns[(simple_returns.index >= window_start) &
+                                   (simple_returns.index <= window_end)][eligible_assets]
+    
+    # Skip if insufficient data
+    if returns_window.empty or returns_window.shape[1] < 2:
+        print(f"Skipping year {year}: Insufficient data for optimization")
+        nz_weights[year] = pd.Series(np.nan, index=eligible_assets)
+        continue
+    
+    # Compute value-weighted benchmark weights for year Y
+    vw_weights_Y = compute_vw_weights(mkt_caps_annual, year)
+    if vw_weights_Y.empty:
+        print(f"Skipping year {year}: No benchmark weights")
+        nz_weights[year] = pd.Series(np.nan, index=eligible_assets)
+        continue
+    
+    # Get carbon intensity vector for year Y
+    c_Y = c_vectors.get(year, pd.Series())
+    if c_Y.empty:
+        print(f"Skipping year {year}: No carbon intensity data")
+        nz_weights[year] = pd.Series(np.nan, index=eligible_assets)
+        continue
+    
+    # Compute Net Zero carbon footprint target for year Y
+    cf_target_Y = compute_nz_target(year, CF_Y0_vw, theta)
+    
+    # Align data
+    assets = returns_window.columns
+    vw_weights_aligned = vw_weights_Y.reindex(assets).fillna(0).values
+    c_aligned = c_Y.reindex(assets).fillna(0).values
+    
+    # Estimate covariance matrix using Ledoit-Wolf
+    lw = LedoitWolf()
+    try:
+        lw.fit(returns_window)
+        cov_matrix = lw.covariance_
+    except ValueError as e:
+        print(f"LedoitWolf fit failed for year {year}: {e}")
+        nz_weights[year] = pd.Series(np.nan, index=assets)
+        continue
+    
+    # Optimization: Minimize tracking error with NZ carbon constraint
+    w = cp.Variable(len(assets))
+    diff = w - vw_weights_aligned
+    objective = cp.Minimize(cp.quad_form(diff, cp.psd_wrap(cov_matrix)))
+    constraints = [
+        cp.sum(w) == 1,          # Fully invested
+        w >= 0,                  # Long-only
+        w @ c_aligned <= cf_target_Y,  # Carbon footprint constraint
+        w <= 0.05                # Maximum weight per asset
+    ]
+    prob = cp.Problem(objective, constraints)
+    try:
+        prob.solve()
+        if w.value is None:
+            print(f"Optimization failed for year {year}")
+            nz_weights[year] = pd.Series(np.nan, index=assets)
+        else:
+            print(f"Optimization successful for year {year}")
+            nz_weights[year] = pd.Series(w.value, index=assets)
+    except Exception as e:
+        print(f"Optimization error for year {year}: {e}")
+        nz_weights[year] = pd.Series(np.nan, index=assets)
+
+# Check if any optimization succeeded
+if not any(w.notna().any() for w in nz_weights.values()):
+    print("Warning: No successful optimizations for NZ portfolio. NZ series will be empty.")
+    nz_series = pd.Series()
+else:
+    # Compute ex-post returns for NZ portfolio
+    nz_series = compute_portfolio_returns(simple_returns, nz_weights, mode='mvp')
+
+# Compute performance metrics for NZ portfolio if series is valid
+if not nz_series.empty:
+    metrics['nz'] = compute_metrics(nz_series, rf_series.reindex(nz_series.index, method='ffill'))
+else:
+    print("NZ series is empty; skipping metrics computation for NZ portfolio.")
+
+# Rebuild metrics_df with all portfolios
+metrics_df = pd.DataFrame.from_dict(metrics, orient='index', columns=metric_names)
+
+# Compute carbon footprints for NZ portfolio (verification)
+carbon_footprints_nz = {}
+for Y in range(2013, 2024):  # From 2013 to 2023, using weights from Y-1 for year Y
+    weights_Y_minus_1 = nz_weights.get(Y - 1, pd.Series())
+    if weights_Y_minus_1.empty or weights_Y_minus_1.isna().all():
+        continue
+    firms_Y = weights_Y_minus_1.index
+    c_Y = c_vectors.get(Y, pd.Series())
+    common_firms = firms_Y.intersection(c_Y.index)
+    if common_firms.empty:
+        continue
+    weights_Y_minus_1 = weights_Y_minus_1.reindex(common_firms)
+    c_Y = c_Y.reindex(common_firms)
+    cf_Y = (weights_Y_minus_1 * c_Y).sum()
+    carbon_footprints_nz[Y] = cf_Y
+
+# Display NZ portfolio metrics if available
+print("\n=== Net Zero Portfolio Metrics ===")
+if 'nz' in metrics_df.index:
+    formatted_metrics = metrics_df.loc['nz'].apply(lambda x: f"{x:.4f}" if isinstance(x, (int, float)) else x)
+    print(formatted_metrics.to_string())
+else:
+    print("NZ portfolio metrics not available.")
+
+# Display carbon footprint verification
+print("\n=== Carbon Footprint for NZ Portfolio ===")
+print("Year | Target CF | Actual CF | Ratio (Actual/Target)")
+for Y in carbon_footprints_nz.keys():
+    cf_target = compute_nz_target(Y, CF_Y0_vw, theta)
+    cf_actual = carbon_footprints_nz[Y]
+    ratio = cf_actual / cf_target if cf_target != 0 else np.nan
+    print(f"{Y}   | {cf_target:.2f}       | {cf_actual:.2f}         | {ratio:.2f}")
+
+# Plot cumulative returns
+plt.figure(figsize=(12, 6))
+(1 + vw_series).cumprod().plot(label="VW Portfolio")
+if not nz_series.empty:
+    (1 + nz_series).cumprod().plot(label="NZ Portfolio")
+plt.title("Cumulative Returns: VW vs NZ Portfolio (2014–2024)")
+plt.xlabel("Date")
+plt.ylabel("Portfolio Value")
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+# Plot carbon footprints with targets
+if carbon_footprints_nz:
+    years = list(carbon_footprints_nz.keys())
+    targets = [compute_nz_target(Y, CF_Y0_vw, theta) for Y in years]
+    actual_cf = list(carbon_footprints_nz.values())
+    plt.figure(figsize=(10, 6))
+    plt.plot(years, targets, marker='o', label='NZ Target CF')
+    plt.plot(years, actual_cf, marker='s', label='NZ Portfolio CF')
+    plt.title("NZ Portfolio Carbon Footprint vs Targets (2013–2023)")
+    plt.xlabel("Year")
+    plt.ylabel("Carbon Footprint (tons CO2e per million USD)")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
