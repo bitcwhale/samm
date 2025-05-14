@@ -547,3 +547,108 @@ table.set_fontsize(10)
 table.scale(1, 1.5)  # Adjust table size
 plt.title("Portfolio Performance Metrics Table", fontsize=12, pad=20)
 plt.show()
+
+# ------------------------------
+# STEP 10 – CARBON METRICS FOR P_mv_oos
+# ------------------------------
+
+# Create long-format emissions data
+scope1_long = scope1_us.melt(
+    id_vars=['Firm_Name'],
+    value_vars=[col for col in scope1_us.columns if str(col).isdigit()],
+    var_name='Year',
+    value_name='Scope1'
+)
+scope2_long = scope2_us.melt(
+    id_vars=['Firm_Name'],
+    value_vars=[col for col in scope2_us.columns if str(col).isdigit()],
+    var_name='Year',
+    value_name='Scope2'
+)
+
+# Merge Scope 1 and Scope 2 emissions
+emissions_long = pd.merge(scope1_long, scope2_long, on=['Firm_Name', 'Year'], how='inner')
+emissions_long['E'] = emissions_long['Scope1'] + emissions_long['Scope2']
+emissions_long['Year'] = emissions_long['Year'].astype(int)
+
+# Create long-format revenue data (already pivoted and resampled monthly in STEP 2)
+# We need annual revenues, so take the last value of each year
+revenues_annual = revenues.groupby(revenues.index.year).last()
+
+# Create annual market caps (last value of each year)
+mkt_caps_annual = mkt_caps.groupby(mkt_caps.index.year).last()
+
+# Compute WACI and Carbon Footprint for P_mv_oos using 'lw' method
+method = 'lw'
+carbon_footprints = {}
+waci_values = {}
+
+for Y in range(2013, 2025):  # From 2013 to 2025
+    # Get weights from previous year (weights for year Y are set at end of Y-1)
+    weights_Y_minus_1 = mvp_weights_all[method].get(Y - 1, pd.Series())
+    if weights_Y_minus_1.empty:
+        print(f"No weights available for year {Y-1}")
+        continue
+    firms_Y = weights_Y_minus_1.index
+
+    # Get emissions for year Y
+    emissions_Y = emissions_long[emissions_long['Year'] == Y]
+    emissions_Y = emissions_Y.set_index('Firm_Name')['E'].reindex(firms_Y).dropna()
+
+    # Get market cap for year Y (end of year)
+    if Y not in mkt_caps_annual.index:
+        print(f"No market cap data for year {Y}")
+        continue
+    mkt_cap_Y = mkt_caps_annual.loc[Y].reindex(firms_Y).dropna()
+
+    # Get revenues for year Y (end of year)
+    if Y not in revenues_annual.index:
+        print(f"No revenue data for year {Y}")
+        continue
+    revenue_Y = revenues_annual.loc[Y].reindex(firms_Y).dropna()
+
+    # Align data: keep only firms with weights, emissions, market cap, and revenue
+    common_firms = weights_Y_minus_1.index.intersection(emissions_Y.index).intersection(mkt_cap_Y.index).intersection(revenue_Y.index)
+    if common_firms.empty:
+        print(f"No common firms for year {Y}")
+        continue
+
+    weights_Y_minus_1 = weights_Y_minus_1.reindex(common_firms)
+    emissions_Y = emissions_Y.reindex(common_firms)
+    mkt_cap_Y = mkt_cap_Y.reindex(common_firms)
+    revenue_Y = revenue_Y.reindex(common_firms)
+
+    # Compute Carbon Footprint (tons CO2e per million USD invested)
+    emissions_over_mkt_cap = emissions_Y / mkt_cap_Y  # mkt_caps in millions USD
+    cf_Y = (weights_Y_minus_1 * emissions_over_mkt_cap).sum()
+    carbon_footprints[Y] = cf_Y
+
+    # Compute Carbon Intensity (CI_i,Y) = E_i,Y / Revenue_i,Y (tons CO2e per million USD of revenue)
+    # Revenues are in thousands USD, so convert to millions: divide by 1,000
+    revenue_Y_millions = revenue_Y / 1_000  # thousands to millions
+    ci_Y = emissions_Y / revenue_Y_millions  # tons CO2e per million USD
+
+    # Compute WACI (tons CO2e per million USD of revenue)
+    waci_Y = (weights_Y_minus_1 * ci_Y).sum()
+    waci_values[Y] = waci_Y
+
+# Display the results
+print("\n=== Carbon Footprint for P_mv_oos (tons CO2e per million USD invested) ===")
+for year, cf in carbon_footprints.items():
+    print(f"Year {year}: {cf:.2f}")
+
+print("\n=== Weighted-Average Carbon Intensity for P_mv_oos (tons CO2e per million USD of revenue) ===")
+for year, waci in waci_values.items():
+    print(f"Year {year}: {waci:.2f}")
+
+# Plot CF and WACI over time
+plt.figure(figsize=(10, 6))
+plt.plot(list(carbon_footprints.keys()), list(carbon_footprints.values()), marker='o', label='Carbon Footprint (tons CO2e per million USD invested)')
+plt.plot(list(waci_values.keys()), list(waci_values.values()), marker='s', label='WACI (tons CO2e per million USD of revenue)')
+plt.title("Carbon Footprint and WACI for P_mv_oos (2014–2023)")
+plt.xlabel("Year")
+plt.ylabel("Metrics (tons CO2e per million USD)")
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
