@@ -652,3 +652,170 @@ plt.grid(True)
 plt.legend()
 plt.tight_layout()
 plt.show()
+
+
+# ------------------------------
+# STEP 11 – PORTFOLIO WITH 50% CARBON FOOTPRINT REDUCTION (2.2)
+# ------------------------------
+
+# Compute c_Y vectors for each year (E_{i,Y} / Cap_{i,Y})
+c_vectors = {}
+for Y in range(2013, 2024):
+    emissions_Y = emissions_long[emissions_long['Year'] == Y].set_index('Firm_Name')['E']
+    if Y not in mkt_caps_annual.index:
+        continue
+    mkt_cap_Y = mkt_caps_annual.loc[Y]
+    common_firms = emissions_Y.index.intersection(mkt_cap_Y.index)
+    c_Y = emissions_Y.reindex(common_firms) / mkt_cap_Y.reindex(common_firms)
+    c_vectors[Y] = c_Y.dropna()
+
+# Compute carbon footprints for the original portfolio (already done in STEP 10, adjust if needed)
+# Ensure carbon_footprints is available from STEP 10
+carbon_footprints_original = carbon_footprints  # From STEP 10
+
+# Modify compute_mvp_weights to include carbon constraint
+def compute_mvp_weights(returns_window, mkt_caps_window, revenues_window, rf_window, method='lw',
+                        max_weight=0.05, prev_weights=None, turnover_limit=None, transaction_cost=None,
+                        carbon_constraint=None):
+    """Compute Minimum Variance Portfolio weights with optional carbon footprint constraint."""
+    sufficient_data = returns_window.count() >= 120
+    returns_window = returns_window.loc[:, sufficient_data].dropna(axis=1, how="any")
+    mkt_caps_window = mkt_caps_window.loc[:, sufficient_data].reindex(returns_window.index, method='ffill')
+    revenues_window = revenues_window.loc[:, sufficient_data].reindex(returns_window.index, method='ffill')
+    rf_window = rf_window.reindex(returns_window.index, method='ffill').fillna(0)
+
+    if returns_window.shape[1] < 2:
+        return pd.Series(np.nan)
+
+    assets = returns_window.columns
+    n = len(assets)
+
+    # Covariance matrix estimation (Ledoit-Wolf)
+    if method == 'lw':
+        lw = LedoitWolf()
+        lw.fit(returns_window)
+        cov_matrix = lw.covariance_
+    else:
+        raise ValueError("Only 'lw' method is implemented for 2.2 in this example.")
+
+    # Optimization with carbon constraint
+    w = cp.Variable(n)
+    constraints = [cp.sum(w) == 1, w >= 0, w <= max_weight]
+    if turnover_limit and prev_weights is not None:
+        aligned_prev = prev_weights.reindex(assets).fillna(0).values
+        constraints.append(cp.norm1(w - aligned_prev) <= turnover_limit)
+    
+    if carbon_constraint is not None:
+        c, threshold = carbon_constraint
+        c_aligned = c.reindex(assets).fillna(0).values  # Align with assets, assume 0 if missing
+        constraints.append(w @ c_aligned <= threshold)
+
+    objective = cp.Minimize(cp.quad_form(w, cp.psd_wrap(cov_matrix)))
+    prob = cp.Problem(objective, constraints)
+    try:
+        prob.solve()
+        if w.value is None:
+            print(f"Optimization failed for method {method}")
+            return pd.Series(np.nan, index=assets)
+    except Exception as e:
+        print(f"Optimization error: {e}")
+        return pd.Series(np.nan, index=assets)
+
+    return pd.Series(w.value, index=assets)
+
+# Rolling optimization for constrained portfolio
+mvp_weights_constrained = {}
+prev_weights = None
+method = 'lw'
+for year in range(start_year, end_year + 1):
+    window_start = pd.Timestamp(f"{year - 10}-01-01")
+    window_end = pd.Timestamp(f"{year - 1}-12-31")
+    eligible_assets = first_available[first_available <= window_start].index
+    returns_window = simple_returns[(simple_returns.index >= window_start) &
+                                    (simple_returns.index <= window_end)][eligible_assets]
+    mkt_caps_window = mkt_caps[(mkt_caps.index >= window_start) &
+                               (mkt_caps.index <= window_end)][eligible_assets]
+    revenues_window = revenues[(revenues.index >= window_start) &
+                               (revenues.index <= window_end)][eligible_assets]
+    rf_window = rf_series[(rf_series.index >= window_start) &
+                          (rf_series.index <= window_end)]
+
+    # Set carbon constraint for year Y (weights for Y+1)
+    Y = year
+    if Y in c_vectors and Y in carbon_footprints_original:
+        c_Y = c_vectors[Y]
+        threshold = 0.5 * carbon_footprints_original[Y]
+        carbon_constraint = (c_Y, threshold)
+    else:
+        carbon_constraint = None
+        print(f"Warning: No carbon constraint data for year {Y}")
+
+    weights = compute_mvp_weights(returns_window, mkt_caps_window, revenues_window, rf_window,
+                                  method=method, max_weight=0.05,
+                                  prev_weights=prev_weights, turnover_limit=0.3,
+                                  carbon_constraint=carbon_constraint)
+    mvp_weights_constrained[year] = weights.dropna()
+    prev_weights = weights
+
+# Compute ex-post returns for constrained portfolio
+mvp_series_constrained = compute_portfolio_returns(simple_returns, mvp_weights_constrained, mode='mvp')
+
+# Compute performance metrics
+metrics['constrained'] = compute_metrics(mvp_series_constrained, rf_aligned)
+
+# Compute carbon footprints for constrained portfolio (for verification)
+carbon_footprints_constrained = {}
+for Y in range(2014, 2025):
+    weights_Y_minus_1 = mvp_weights_constrained.get(Y - 1, pd.Series())
+    if weights_Y_minus_1.empty:
+        continue
+    firms_Y = weights_Y_minus_1.index
+    c_Y = c_vectors.get(Y, pd.Series())
+    common_firms = firms_Y.intersection(c_Y.index)
+    if common_firms.empty:
+        continue
+    weights_Y_minus_1 = weights_Y_minus_1.reindex(common_firms)
+    c_Y = c_Y.reindex(common_firms)
+    cf_Y = (weights_Y_minus_1 * c_Y).sum()
+    carbon_footprints_constrained[Y] = cf_Y
+
+# Display carbon footprints comparison
+print("\n=== Carbon Footprint Comparison ===")
+print("Year | Original CF | Constrained CF | Ratio (Constrained/Original)")
+for Y in carbon_footprints_constrained.keys():
+    cf_orig = carbon_footprints_original.get(Y, np.nan)
+    cf_constr = carbon_footprints_constrained[Y]
+    ratio = cf_constr / cf_orig if cf_orig != 0 else np.nan
+    print(f"{Y}   | {cf_orig:.2f}       | {cf_constr:.2f}         | {ratio:.2f}")
+
+# Update metrics table
+metrics_df = pd.DataFrame.from_dict(metrics, orient='index', columns=metric_names)
+print("\n=== Updated Portfolio Metrics Table ===")
+print(metrics_df.to_string(formatters={
+    k: "{:.4f}".format for k in metric_names
+}))
+
+# Plot cumulative returns
+plt.figure(figsize=(12, 6))
+(1 + mvp_series_all['lw']).cumprod().plot(label="Original MVP (lw)")
+(1 + mvp_series_constrained).cumprod().plot(label="Constrained MVP (lw, 0.5 CF)")
+(1 + vw_series).cumprod().plot(label="VW Portfolio")
+plt.title("Cumulative Returns Comparison (2014–2024)")
+plt.xlabel("Date")
+plt.ylabel("Portfolio Value")
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+# Plot carbon footprints
+plt.figure(figsize=(10, 6))
+plt.plot(list(carbon_footprints_original.keys()), list(carbon_footprints_original.values()), marker='o', label='Original MVP CF')
+plt.plot(list(carbon_footprints_constrained.keys()), list(carbon_footprints_constrained.values()), marker='s', label='Constrained MVP CF (0.5)')
+plt.title("Carbon Footprint Comparison (2014–2023)")
+plt.xlabel("Year")
+plt.ylabel("Carbon Footprint (tons CO2e per million USD)")
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
