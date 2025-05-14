@@ -17,27 +17,40 @@ base_url = "https://raw.githubusercontent.com/bitcwhale/samm/main/"
 
 # Load static info and filter for AMER region
 static_df = pd.read_excel(base_url + "Static.xlsx")
+static_df.columns = static_df.columns.str.strip()  # Remove leading/trailing spaces
+
+# Create a mapping from ISIN to firm name
+isin_to_name = static_df.set_index('ISIN')['Name'].to_dict()
+
+# Filter for AMER region using firm names instead of ISINs
 amer_df = static_df[static_df["Region"] == "AMER"]
-amer_isins = set(amer_df["ISIN"].unique())
+amer_names = set(amer_df["Name"].unique())  # Get unique firm names in AMER region
 
 # Load Scope 1 and Scope 2 emissions
 scope1_df = pd.read_excel(base_url + "Scope_1.xlsx")
 scope2_df = pd.read_excel(base_url + "Scope_2.xlsx")
-scope1_us = scope1_df[scope1_df["ISIN"].isin(amer_isins)]
-scope2_us = scope2_df[scope2_df["ISIN"].isin(amer_isins)]
+
+# Add 'Firm_Name' column to ESG data using the ISIN-to-name mapping
+scope1_df['Firm_Name'] = scope1_df['ISIN'].map(isin_to_name)
+scope2_df['Firm_Name'] = scope2_df['ISIN'].map(isin_to_name)
+
+# Filter ESG data for AMER firms using firm names
+scope1_us = scope1_df[scope1_df["Firm_Name"].isin(amer_names)]
+scope2_us = scope2_df[scope2_df["Firm_Name"].isin(amer_names)]
 
 # Define ESG coverage check: ≥7 years & ≥5 consecutive years
 def check_scope(row):
-    values = row.iloc[2:].notna().astype(int)
+    # Exclude 'ISIN' and 'Firm_Name' columns to focus on yearly data
+    values = row.drop(['ISIN', 'Firm_Name'], errors='ignore').notna().astype(int)
     valid_years = values.sum()
     max_consecutive = values.groupby((values != values.shift()).cumsum()).transform('size') * values
     consecutive_years = max_consecutive.max()
     return (valid_years >= 7) and (consecutive_years >= 5)
 
-# Filter ISINs that meet both Scope 1 and Scope 2 criteria
-scope1_ok = set(scope1_us[scope1_us.apply(check_scope, axis=1)]["ISIN"])
-scope2_ok = set(scope2_us[scope2_us.apply(check_scope, axis=1)]["ISIN"])
-solid_isins = amer_isins & scope1_ok & scope2_ok
+# Filter firm names that meet both Scope 1 and Scope 2 criteria
+scope1_ok = set(scope1_us[scope1_us.apply(check_scope, axis=1)]["Firm_Name"])
+scope2_ok = set(scope2_us[scope2_us.apply(check_scope, axis=1)]["Firm_Name"])
+solid_names = scope1_ok & scope2_ok  # Intersection of firm names meeting ESG criteria
 
 # ------------------------------
 # STEP 2 – LOAD FINANCIAL DATA
@@ -48,10 +61,16 @@ raw_prices = pd.read_excel(base_url + "DS_RI_T_USD_M.xlsx")
 prices = raw_prices.set_index("ISIN").transpose()
 prices.index = pd.to_datetime(prices.index, format="%Y-%m-%d", errors="coerce")
 
+# Replace ISIN columns with firm names
+prices.columns = prices.columns.map(isin_to_name)
+
 # Load market cap data
 raw_mkt_caps = pd.read_excel(base_url + "DS_MV_T_USD_M.xlsx")
 mkt_caps = raw_mkt_caps.set_index("ISIN").transpose()
 mkt_caps.index = pd.to_datetime(mkt_caps.index, format="%Y-%m-%d", errors="coerce")
+
+# Replace ISIN columns with firm names
+mkt_caps.columns = mkt_caps.columns.map(isin_to_name)
 
 # Load and transform revenue data
 raw_revenues = pd.read_excel(base_url + "DS_REV_USD_Y.xlsx")
@@ -64,7 +83,11 @@ revenues_long = raw_revenues.melt(
 )
 revenues_long["Date"] = pd.to_datetime(revenues_long["Year"], format="%Y") + pd.offsets.YearEnd(0)
 revenues = revenues_long.pivot(index="Date", columns="ISIN", values="Revenue")
-revenues = revenues.resample("M").ffill()
+# Using backward-filling to assign annual revenue to months within the year
+revenues = revenues.resample("M").bfill()
+
+# Replace ISIN columns with firm names
+revenues.columns = revenues.columns.map(isin_to_name)
 
 # Load risk-free rate
 rf_df = pd.read_excel(base_url + "Risk_Free_Rate.xlsx")
@@ -77,11 +100,11 @@ rf_series = rf_df["RF"] / 100
 # STEP 3 – ALIGN AND CLEAN DATA
 # ------------------------------
 
-# Filter data to companies that passed ESG screen
-common_isins = solid_isins & set(prices.columns) & set(mkt_caps.columns) & set(revenues.columns)
-prices = prices[list(common_isins)]
-mkt_caps = mkt_caps[list(common_isins)]
-revenues = revenues[list(common_isins)]
+# Filter data to companies that passed ESG screen using firm names
+common_names = solid_names & set(prices.columns) & set(mkt_caps.columns) & set(revenues.columns)
+prices = prices[list(common_names)]
+mkt_caps = mkt_caps[list(common_names)]
+revenues = revenues[list(common_names)]
 
 # Clean: interpolate linearly, internally only
 prices = prices.replace(0, np.nan).apply(pd.to_numeric, errors="coerce")
@@ -93,22 +116,45 @@ mkt_caps = mkt_caps.interpolate(method="linear", axis=0, limit_area="inside")
 revenues = revenues.replace(0, np.nan).apply(pd.to_numeric, errors="coerce")
 revenues = revenues.interpolate(method="linear", axis=0, limit_area="inside")
 
-# Diagnostics
+# Diagnostics after ESG filtering
 print("✅ Data loading and ESG filtering complete.")
-print(f"Remaining ISINs after ESG filter: {len(common_isins)}")
-# Calculate simple returns
-simple_returns = prices.pct_change(fill_method=None)
+print(f"Remaining firms after ESG filter: {len(common_names)}")
+
+# Additional filtering: Drop firms with >10% missing data after interpolation
+max_missing_ratio = 0.1
+for df in [prices, mkt_caps, revenues]:
+    missing_ratios = df.isna().mean()
+    firms_to_drop = missing_ratios[missing_ratios > max_missing_ratio].index
+    df.drop(columns=firms_to_drop, inplace=True)
+
+# Update common_names to reflect dropped firms
+common_names = set(prices.columns) & set(mkt_caps.columns) & set(revenues.columns)
+prices = prices[list(common_names)]
+mkt_caps = mkt_caps[list(common_names)]
+revenues = revenues[list(common_names)]
+
+# Diagnostics after missing value filtering
+print(f"Remaining firms after missing value filtering: {len(common_names)}")
+
+# Calculate simple returns and handle NaNs
+simple_returns = np.log(prices / prices.shift(1)).dropna()
+simple_returns = simple_returns.dropna()  # Drop rows with NaN returns
+
+# Check if risk-free rate covers the period of returns
+if not simple_returns.index.isin(rf_series.index).all():
+    print("Warning: Risk-free rate does not cover the entire period of returns.")
+
+# Retain original first_available calculation
 first_available = simple_returns.notna().apply(lambda x: x[x].index.min())
 
-
 # ------------------------------
-# **NEW FACTOR MODEL FUNCTIONS**
+# STEP 4 – NEW FACTOR MODEL FUNCTIONS
 # ------------------------------
 
 def construct_factors(returns, market_caps, revenues, risk_free_rate):
     try:
-        # 🔧 Forward-fill revenue data (since it's annual) to fill monthly gaps
-        revenues = revenues.ffill(limit=11).bfill(limit=11)
+        # 🔧 Backward-fill revenue data (since it's annual) to align with monthly data
+        revenues = revenues.bfill(limit=11).ffill(limit=11)
 
         # === Market (Mkt-RF) Factor ===
         market_weights = market_caps.div(market_caps.sum(axis=1), axis=0)
@@ -125,10 +171,6 @@ def construct_factors(returns, market_caps, revenues, risk_free_rate):
         # Avoid divide-by-zero issues in revenue-to-market
         safe_mkt_caps = market_caps.copy()
         safe_mkt_caps[safe_mkt_caps <= 0] = np.nan
-        #print("Revenues coverage:")
-        #print(revenues.notna().sum().sort_values().tail(10))
-        #print("Market caps coverage:")
-        #print(market_caps.notna().sum().sort_values().tail(10))
         revenue_to_market = revenues.div(safe_mkt_caps)
 
         rm_median = revenue_to_market.median(axis=1)
@@ -177,8 +219,6 @@ def construct_factors(returns, market_caps, revenues, risk_free_rate):
         print("risk_free_rate shape:", risk_free_rate.shape)
         return pd.DataFrame()
 
-
-
 def estimate_factor_loadings(returns, factors):
     betas = {}
     residuals = {}
@@ -198,7 +238,6 @@ def estimate_factor_loadings(returns, factors):
         betas[company] = beta[1:]
         residuals[company] = y - X @ beta
     return betas, residuals
-
 
 def compute_factor_cov_matrix(returns, factors):
     betas, residuals = estimate_factor_loadings(returns, factors)
@@ -233,7 +272,7 @@ def compute_factor_cov_matrix(returns, factors):
     return cov_matrix, companies
 
 # ------------------------------
-# **STEP 2 – MVP WEIGHT FUNCTION**
+# STEP 5 – MVP WEIGHT FUNCTION
 # ------------------------------
 
 def compute_mvp_weights(returns_window, mkt_caps_window, revenues_window, rf_window, method='lw',
@@ -310,9 +349,8 @@ def compute_mvp_weights(returns_window, mkt_caps_window, revenues_window, rf_win
 
     return pd.Series(w.value, index=assets) if w.value is not None else pd.Series(np.nan, index=assets)
 
-
 # ------------------------------
-# **STEP 3 – ROLLING OPTIMIZATION**
+# STEP 6 – ROLLING OPTIMIZATION
 # ------------------------------
 
 start_year = 2013
@@ -345,11 +383,8 @@ for method in methods:
 
     mvp_weights_all[method] = mvp_weights
 
-
-# [Vorheriger Code bleibt unverändert bis STEP 3]
-
 # ------------------------------
-# **STEP 4 – EX-POST RETURNS**
+# STEP 7 – EX-POST RETURNS
 # ------------------------------
 
 def compute_portfolio_returns(returns_df, weights_dict=None, mkt_caps_df=None, mode='mvp'):
@@ -399,18 +434,16 @@ def compute_portfolio_returns(returns_df, weights_dict=None, mkt_caps_df=None, m
 
     return pd.Series(returns, index=pd.to_datetime(dates))
 
-
 # Compute returns for all portfolios
 mvp_series_all = {method: compute_portfolio_returns(simple_returns, mvp_weights_all[method], mode='mvp')
                   for method in methods}
 vw_series = compute_portfolio_returns(simple_returns, mkt_caps_df=mkt_caps, mode='vw')
 
 # ------------------------------
-# **STEP 5 – PERFORMANCE METRICS**
+# STEP 8 – PERFORMANCE METRICS
 # ------------------------------
 
 rf_aligned = rf_series.reindex(vw_series.index, method="ffill")
-
 
 def compute_metrics(r, rf):
     """Calculate portfolio performance metrics."""
@@ -436,7 +469,6 @@ def compute_metrics(r, rf):
 
     return ann_avg_ret, ann_vol, cumulative_return, sharpe, rmin, rmax, max_drawdown
 
-
 # Compute metrics for all portfolios
 metrics = {method: compute_metrics(mvp_series_all[method], rf_aligned) for method in methods}
 metrics['VW'] = compute_metrics(vw_series, rf_aligned)
@@ -455,7 +487,7 @@ for name in metrics.keys():
     print(f"{'Maximum Drawdown':<30}: {max_dd:>8.4f}")
 
 # ------------------------------
-# **STEP 6 – PLOT CUMULATIVE RETURNS**
+# STEP 9 – PLOT CUMULATIVE RETURNS
 # ------------------------------
 
 plt.figure(figsize=(12, 6))
@@ -471,129 +503,47 @@ plt.legend()
 plt.tight_layout()
 plt.show()
 
-import matplotlib.pyplot as plt
-import pandas as pd
+# ------------------------------
+# STEP 10 – DISPLAY PORTFOLIO METRICS AS A TABLE
+# ------------------------------
 
-# Assuming `metrics` is a dict with tuples
-df = pd.DataFrame.from_dict(metrics, orient='index', columns=[
-    "Annualized Average Return", "Annualized Volatility", "Cumulative Total Return",
-    "Sharpe Ratio", "Minimum Monthly Return", "Maximum Monthly Return", "Maximum Drawdown"
-])
+# Create a DataFrame for the metrics
+metric_names = [
+    "Annualized Average Return",
+    "Annualized Volatility",
+    "Cumulative Total Return",
+    "Sharpe Ratio",
+    "Minimum Monthly Return",
+    "Maximum Monthly Return",
+    "Maximum Drawdown"
+]
+metrics_df = pd.DataFrame.from_dict(metrics, orient='index', columns=metric_names)
 
-# Set up a basic matplotlib figure
-fig, ax = plt.subplots(figsize=(12, 0.5 * len(df)))
-ax.axis('off')
+# Option 1: Display the DataFrame as a formatted text table
+print("\n=== Portfolio Metrics Table (Text Format) ===")
+print(metrics_df.to_string(formatters={
+    "Annualized Average Return": "{:.4f}".format,
+    "Annualized Volatility": "{:.4f}".format,
+    "Cumulative Total Return": "{:.4f}".format,
+    "Sharpe Ratio": "{:.4f}".format,
+    "Minimum Monthly Return": "{:.4f}".format,
+    "Maximum Monthly Return": "{:.4f}".format,
+    "Maximum Drawdown": "{:.4f}".format
+}))
 
-# Plot the DataFrame as a table
-table = ax.table(cellText=df.round(4).values,
-                 colLabels=df.columns,
-                 rowLabels=df.index,
-                 loc='center',
-                 cellLoc='center')
-
+# Option 2: Plot the metrics as a table using matplotlib
+plt.figure(figsize=(12, 4))
+plt.axis('off')  # Hide axes
+table = plt.table(
+    cellText=metrics_df.round(4).values,
+    colLabels=metrics_df.columns,
+    rowLabels=metrics_df.index,
+    loc='center',
+    cellLoc='center',
+    colWidths=[0.15] * len(metrics_df.columns)
+)
 table.auto_set_font_size(False)
 table.set_fontsize(10)
-table.scale(1.2, 1.2)
-
-plt.title("Portfolio Performance Metrics", fontsize=14, pad=20)
-plt.tight_layout()
-plt.show()
-
-# ------------------------------
-# STEP 2.1 – CARBON METRICS FOR P_mv_oos
-# ------------------------------
-
-# 1) Build annual emissions DataFrame
-# (scope1_us and scope2_us are already filtered to your AMER + ESG set)
-em1 = scope1_us.melt(id_vars='ISIN',
-                     value_vars=[c for c in scope1_us.columns if str(c).isdigit()],
-                     var_name='Year', value_name='E1')
-em2 = scope2_us.melt(id_vars='ISIN',
-                     value_vars=[c for c in scope2_us.columns if str(c).isdigit()],
-                     var_name='Year', value_name='E2')
-emissions = (em1
-             .merge(em2, on=['ISIN','Year'])
-             .assign(Year=lambda df: df['Year'].astype(int),
-                     E=lambda df: df['E1'] + df['E2'])
-             .pivot(index='Year', columns='ISIN', values='E'))
-
-# 2) Build annual revenue DataFrame
-rev_ann = (revenues_long
-           .assign(Year=lambda df: df['Year'].astype(int),
-                   Revenue=lambda df: pd.to_numeric(df['Revenue'], errors='coerce') / 1_000)  # Convert to numeric, then USD to MUSD
-           .pivot(index='Year', columns='ISIN', values='Revenue'))
-
-# 3) Extract December market caps
-mktcaps_ann = mkt_caps[mkt_caps.index.month == 12]
-# map Year → the December row for that year
-mktcaps_ann.index = pd.to_datetime(mktcaps_ann.index).year
-
-# 4) Pick your Part I weights (e.g. Ledoit–Wolf)
-weights_mv = mvp_weights_all['lw']
-
-# 5) Compute WACI and CF each year
-years = list(range(2013, 2024))
-waci = {}
-cf   = {}
-
-for Y in years:
-    w = weights_mv.get(Y)
-    if w is None or w.empty:
-        waci[Y] = np.nan
-        cf[Y]   = np.nan
-        continue
-
-    # align to firms with data
-    common = (w.index
-                .intersection(emissions.columns)
-                .intersection(rev_ann.columns)
-                .intersection(mktcaps_ann.columns))
-    w = w[common]
-    
-    E = emissions.loc[Y, common]
-    R = rev_ann.loc[Y, common]
-    C = mktcaps_ann.loc[Y, common]
-    
-    #  a) carbon intensity per firm
-    CI = E / R
-    
-    #  b) weighted‐average carbon intensity
-    waci[Y] = (w * CI).sum()
-    
-    #  c) carbon footprint per $1 M invested
-    cf[Y] = (w * (E / C)).sum()
-
-# 6) Put into a DataFrame for inspection
-carbon_df = pd.DataFrame({
-    'WACI (tCO2 per MUSD)': pd.Series(waci),
-    'CF   (tCO2 per MUSD)': pd.Series(cf)
-})
-print("\n=== Carbon Metrics for P(mv)_oos (lw) ===")
-print(carbon_df)
-
-import matplotlib.pyplot as plt
-
-# assume carbon_df is indexed by Year and has the two columns
-fig, ax1 = plt.subplots(figsize=(10, 6))
-
-# Plot WACI on the left y–axis
-ax1.set_xlabel('Year')
-ax1.set_ylabel('WACI (tCO₂ per MUSD)', fontsize=12)
-ax1.plot(carbon_df.index, carbon_df['WACI (tCO2 per MUSD)'], marker='o', label='WACI', color='tab:red')
-ax1.tick_params(axis='y')
-ax1.grid(True, which='both', axis='x', linestyle='--', alpha=0.5)
-
-# Create a second y–axis sharing the same x–axis
-ax2 = ax1.twinx()
-ax2.set_ylabel('CF (tCO₂ per MUSD)', fontsize=12)
-ax2.plot(carbon_df.index, carbon_df['CF   (tCO2 per MUSD)'], marker='s', label='CF', color='tab:blue')
-ax2.tick_params(axis='y')
-
-# Combine legends from both axes
-lines_1, labels_1 = ax1.get_legend_handles_labels()
-lines_2, labels_2 = ax2.get_legend_handles_labels()
-ax1.legend(lines_1 + lines_2, labels_1 + labels_2, loc='upper left')
-
-plt.title('Portfolio Carbon Metrics Over Time', fontsize=14, pad=10)
-plt.tight_layout()
+table.scale(1, 1.5)  # Adjust table size
+plt.title("Portfolio Performance Metrics Table", fontsize=12, pad=20)
 plt.show()
