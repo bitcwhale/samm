@@ -549,7 +549,7 @@ plt.title("Portfolio Performance Metrics Table", fontsize=12, pad=20)
 plt.show()
 
 # ------------------------------
-# STEP 10 – CARBON METRICS FOR P_mv_oos
+# STEP 11 – CARBON METRICS FOR P_mv_oos
 # ------------------------------
 
 # Create long-format emissions data
@@ -655,7 +655,7 @@ plt.show()
 
 
 # ------------------------------
-# STEP 11 – PORTFOLIO WITH 50% CARBON FOOTPRINT REDUCTION (2.2)
+# STEP 12 – PORTFOLIO WITH 50% CARBON FOOTPRINT REDUCTION (2.2)
 # ------------------------------
 
 # Compute c_Y vectors for each year (E_{i,Y} / Cap_{i,Y})
@@ -821,7 +821,7 @@ plt.tight_layout()
 plt.show()
 
 # ------------------------------
-# STEP 12 – PORTFOLIO TRACKING WITH 50% CARBON FOOTPRINT REDUCTION (2.3)
+# STEP 13 – PORTFOLIO TRACKING WITH 50% CARBON FOOTPRINT REDUCTION (2.3)
 # ------------------------------
 
 # Function to compute value-weighted benchmark weights for a given year
@@ -1046,7 +1046,7 @@ plt.show()
 
 
 # ------------------------------
-# STEP 13 – COMPARAISON ANALYSIS 50% CARBON FOOTPRINT REDUCTION (2.4)
+# STEP 14 – COMPARAISON ANALYSIS 50% CARBON FOOTPRINT REDUCTION (2.4)
 # ------------------------------
 
 
