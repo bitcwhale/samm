@@ -149,13 +149,21 @@ first_available = simple_returns.notna().apply(lambda x: x[x].index.min())
 
 def construct_factors(returns, market_caps, revenues, risk_free_rate):
     try:
-        #  Backward-fill revenue data (since it's annual) to align with monthly data
+        # Backward-fill revenue data (since it's annual) to align with monthly data
         revenues = revenues.bfill(limit=11).ffill(limit=11)
 
-    # === Market (Mkt-RF) Factor ===
-    market_weights = market_caps.div(market_caps.sum(axis=1), axis=0)
-    market_return = (returns * market_weights).sum(axis=1)
-    excess_market_return = market_return - risk_free_rate
+        # === Market (Mkt-RF) Factor ===
+        market_weights = market_caps.div(market_caps.sum(axis=1), axis=0)
+        market_return = (returns * market_weights).sum(axis=1)
+        excess_market_return = market_return - risk_free_rate
+
+        # Optionally, return the result (assuming this is the intent)
+        return excess_market_return  # Adjust based on your full function needs
+
+    except Exception as e:
+        print(f"An error occurred in construct_factors: {e}")
+        # Return a default value or raise the exception, depending on your needs
+        raise  # or return None, pd.DataFrame(), etc.
 
     # === Size (SMB) Factor ===
     market_cap_median = market_caps.median(axis=1)
