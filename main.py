@@ -1234,7 +1234,7 @@ for year in range(start_year, end_year + 1):
         cp.sum(w) == 1,          # Fully invested
         w >= 0,                  # Long-only
         w @ c_aligned <= cf_target_Y,  # Carbon footprint constraint
-        w <= 0.05                # Maximum weight per asset
+        w <= 0.08                # Maximum weight per asset
     ]
     prob = cp.Problem(objective, constraints)
     try:
