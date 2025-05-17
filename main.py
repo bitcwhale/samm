@@ -94,7 +94,7 @@ rf_df = pd.read_excel(base_url + "Risk_Free_Rate.xlsx")
 rf_df.columns = ["DateRaw", "RF"]
 rf_df["Date"] = pd.to_datetime(rf_df["DateRaw"].astype(str), format="%Y%m")
 rf_df.set_index("Date", inplace=True)
-rf_series = rf_df["RF"] / 100
+rf_series = rf_df["RF"] / 50
 
 # ------------------------------
 # STEP 3 – ALIGN AND CLEAN DATA
@@ -120,7 +120,7 @@ revenues = revenues.interpolate(method="linear", axis=0, limit_area="inside")
 print("✅ Data loading and ESG filtering complete.")
 print(f"Remaining firms after ESG filter: {len(common_names)}")
 
-# Additional filtering: Drop firms with >10% missing data after interpolation
+# Additional filtering: Drop firms with >5% missing data after interpolation
 max_missing_ratio = 0.1
 for df in [prices, mkt_caps, revenues]:
     missing_ratios = df.isna().mean()
@@ -278,7 +278,7 @@ def compute_factor_cov_matrix(returns, factors):
 def compute_mvp_weights(returns_window, mkt_caps_window, revenues_window, rf_window, method='lw',
                         max_weight=0.05, prev_weights=None, turnover_limit=None, transaction_cost=None):
     """Compute Minimum Variance Portfolio weights using specified method."""
-    sufficient_data = returns_window.count() >= 120
+    sufficient_data = returns_window.count() >= 60
     returns_window = returns_window.loc[:, sufficient_data].dropna(axis=1, how="any")
     mkt_caps_window = mkt_caps_window.loc[:, sufficient_data].reindex(returns_window.index, method='ffill')
     revenues_window = revenues_window.loc[:, sufficient_data].reindex(returns_window.index, method='ffill')
@@ -353,7 +353,7 @@ def compute_mvp_weights(returns_window, mkt_caps_window, revenues_window, rf_win
 # STEP 6 – ROLLING OPTIMIZATION
 # ------------------------------
 
-start_year = 2013
+start_year = 2012
 end_year = 2023
 methods = ['lw', 'pinv', 'factor_1', 'factor_3', 'identity']
 mvp_weights_all = {}
@@ -362,7 +362,7 @@ for method in methods:
     mvp_weights = {}
     prev_weights = None
     for year in range(start_year, end_year + 1):
-        window_start = pd.Timestamp(f"{year - 10}-01-01")
+        window_start = pd.Timestamp(f"{year - 5}-01-01")
         window_end = pd.Timestamp(f"{year - 1}-12-31")
 
         eligible_assets = first_available[first_available <= window_start].index
@@ -504,7 +504,7 @@ plt.tight_layout()
 plt.show()
 
 # ------------------------------
-# STEP 10 – DISPLAY PORTFOLIO METRICS AS A TABLE
+# STEP 5 – DISPLAY PORTFOLIO METRICS AS A TABLE
 # ------------------------------
 
 # Create a DataFrame for the metrics
@@ -543,7 +543,7 @@ table = plt.table(
     colWidths=[0.15] * len(metrics_df.columns)
 )
 table.auto_set_font_size(False)
-table.set_fontsize(10)
+table.set_fontsize(5)
 table.scale(1, 1.5)  # Adjust table size
 plt.title("Portfolio Performance Metrics Table", fontsize=12, pad=20)
 plt.show()
@@ -642,7 +642,7 @@ for year, waci in waci_values.items():
     print(f"Year {year}: {waci:.2f}")
 
 # Plot CF and WACI over time
-plt.figure(figsize=(10, 6))
+plt.figure(figsize=(5, 6))
 plt.plot(list(carbon_footprints.keys()), list(carbon_footprints.values()), marker='o', label='Carbon Footprint (tons CO2e per million USD invested)')
 plt.plot(list(waci_values.keys()), list(waci_values.values()), marker='s', label='WACI (tons CO2e per million USD of revenue)')
 plt.title("Carbon Footprint and WACI for P_mv_oos (2013–2023)")
@@ -669,16 +669,16 @@ for Y in range(2013, 2023):
     c_Y = emissions_Y.reindex(common_firms) / mkt_cap_Y.reindex(common_firms)
     c_vectors[Y] = c_Y.dropna()
 
-# Compute carbon footprints for the original portfolio (already done in STEP 10, adjust if needed)
-# Ensure carbon_footprints is available from STEP 10
-carbon_footprints_original = carbon_footprints  # From STEP 10
+# Compute carbon footprints for the original portfolio (already done in STEP 5, adjust if needed)
+# Ensure carbon_footprints is available from STEP 5
+carbon_footprints_original = carbon_footprints  # From STEP 5
 
 # Modify compute_mvp_weights to include carbon constraint
 def compute_mvp_weights(returns_window, mkt_caps_window, revenues_window, rf_window, method='lw',
                         max_weight=0.05, prev_weights=None, turnover_limit=None, transaction_cost=None,
                         carbon_constraint=None):
     """Compute Minimum Variance Portfolio weights with optional carbon footprint constraint."""
-    sufficient_data = returns_window.count() >= 120
+    sufficient_data = returns_window.count() >= 60
     returns_window = returns_window.loc[:, sufficient_data].dropna(axis=1, how="any")
     mkt_caps_window = mkt_caps_window.loc[:, sufficient_data].reindex(returns_window.index, method='ffill')
     revenues_window = revenues_window.loc[:, sufficient_data].reindex(returns_window.index, method='ffill')
@@ -728,7 +728,7 @@ mvp_weights_constrained = {}
 prev_weights = None
 method = 'lw'
 for year in range(start_year, end_year + 1):
-    window_start = pd.Timestamp(f"{year - 10}-01-01")
+    window_start = pd.Timestamp(f"{year - 5}-01-01")
     window_end = pd.Timestamp(f"{year - 1}-12-31")
     eligible_assets = first_available[first_available <= window_start].index
     returns_window = simple_returns[(simple_returns.index >= window_start) &
@@ -809,7 +809,7 @@ plt.tight_layout()
 plt.show()
 
 # Plot carbon footprints
-plt.figure(figsize=(10, 6))
+plt.figure(figsize=(5, 6))
 plt.plot(list(carbon_footprints_original.keys()), list(carbon_footprints_original.values()), marker='o', label='Original MVP CF')
 plt.plot(list(carbon_footprints_constrained.keys()), list(carbon_footprints_constrained.values()), marker='s', label='Constrained MVP CF (0.5)')
 plt.title("Carbon Footprint Comparison (2013–2023)")
@@ -881,8 +881,8 @@ def compute_tracking_weights(returns_window, mkt_caps_window, revenues_window, r
     Returns:
         pd.Series: Optimized weights, or NaN-filled Series if optimization fails
     """
-    # Filter for assets with sufficient data (at least 120 observations) and no NaNs
-    sufficient_data = returns_window.count() >= 120
+    # Filter for assets with sufficient data (at least 60 observations) and no NaNs
+    sufficient_data = returns_window.count() >= 60
     returns_window = returns_window.loc[:, sufficient_data].dropna(axis=1, how="any")
     
     # Check if there's enough data to proceed
@@ -940,8 +940,8 @@ tracking_weights = {}
 method = 'lw'
 
 for year in range(start_year, end_year + 1):
-    # Define 10-year lookback window
-    window_start = pd.Timestamp(f"{year - 10}-01-01")
+    # Define 5-year lookback window
+    window_start = pd.Timestamp(f"{year - 5}-01-01")
     window_end = pd.Timestamp(f"{year - 1}-12-31")
     
     # Filter for assets available at window_start
@@ -1032,7 +1032,7 @@ plt.tight_layout()
 plt.show()
 
 # Plot carbon footprints
-plt.figure(figsize=(10, 6))
+plt.figure(figsize=(5, 6))
 plt.plot(list(benchmark_cf.keys()), list(benchmark_cf.values()), marker='o', label='Benchmark CF')
 plt.plot(list(carbon_footprints_tracking.keys()), list(carbon_footprints_tracking.values()), marker='s', label='Tracking Portfolio CF (0.5)')
 plt.title("Carbon Footprint Comparison (2013–2023)")
@@ -1154,7 +1154,7 @@ plt.show()
 
 # Base year and reduction rate
 Y0 = 2013
-theta = 0.10  # 10% annual reduction
+theta = 0.5  # 5% annual reduction
 
 # Compute base year carbon footprint for the benchmark (P^(vw))
 emissions_Y0 = emissions_long[emissions_long['Year'] == Y0].set_index('Firm_Name')['E']
@@ -1181,8 +1181,8 @@ start_year = 2013
 end_year = 2023
 
 for year in range(start_year, end_year + 1):
-    # Define 10-year lookback window for covariance estimation
-    window_start = pd.Timestamp(f"{year - 10}-01-01")
+    # Define 5-year lookback window for covariance estimation
+    window_start = pd.Timestamp(f"{year - 5}-01-01")
     window_end = pd.Timestamp(f"{year - 1}-12-31")
     eligible_assets = first_available[first_available <= window_start].index
     returns_window = simple_returns[(simple_returns.index >= window_start) &
@@ -1317,7 +1317,7 @@ if carbon_footprints_nz:
     years = list(carbon_footprints_nz.keys())
     targets = [compute_nz_target(Y, CF_Y0_vw, theta) for Y in years]
     actual_cf = list(carbon_footprints_nz.values())
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(5, 6))
     plt.plot(years, targets, marker='o', label='NZ Target CF')
     plt.plot(years, actual_cf, marker='s', label='NZ Portfolio CF')
     plt.title("NZ Portfolio Carbon Footprint vs Targets (2013–2023)")
