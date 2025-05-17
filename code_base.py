@@ -6,12 +6,341 @@ import datetime
 import os
 from sklearn.covariance import LedoitWolf
 import cvxpy as cp
-from sklearn.decomposition import PCA
-
-# Define base URL for GitHub raw data files
+from sklearn.decomposition import PCA# Define base URL for GitHub raw data files
 base_url = "https://raw.githubusercontent.com/bitcwhale/samm/main/"
 
-# [STEP 1 to STEP 5 remain unchanged - data loading, cleaning, and MVP weight function]
+# ------------------------------
+# STEP 1 – LOAD STATIC & ESG DATA
+# ------------------------------
+
+# Load static info and filter for AMER region
+static_df = pd.read_excel(base_url + "Static.xlsx")
+static_df.columns = static_df.columns.str.strip()  
+
+# Remove leading/trailing spaces# Create a mapping from ISIN to firm name
+isin_to_name = static_df.set_index('ISIN')['Name'].to_dict()
+
+# Filter for AMER region using firm names instead of ISINs
+amer_df = static_df[static_df["Region"] == "AMER"]
+amer_names = set(amer_df["Name"].unique())  
+
+# Get unique firm names in AMER region# Load Scope 1 and Scope 2 emissions
+scope1_df = pd.read_excel(base_url + "Scope_1.xlsx")
+scope2_df = pd.read_excel(base_url + "Scope_2.xlsx")
+
+# Add 'Firm_Name' column to ESG data using the ISIN-to-name mapping
+scope1_df['Firm_Name'] = scope1_df['ISIN'].map(isin_to_name)
+scope2_df['Firm_Name'] = scope2_df['ISIN'].map(isin_to_name)
+
+# Filter ESG data for AMER firms using firm names
+scope1_us = scope1_df[scope1_df["Firm_Name"].isin(amer_names)]
+scope2_us = scope2_df[scope2_df["Firm_Name"].isin(amer_names)]
+
+# Define ESG coverage check: ≥7 years & ≥5 consecutive years
+def check_scope(row):
+    # Exclude 'ISIN' and 'Firm_Name' columns to focus on yearly data
+    values = row.drop(['ISIN', 'Firm_Name'], errors='ignore').notna().astype(int)
+    valid_years = values.sum()
+    max_consecutive = values.groupby((values != values.shift()).cumsum()).transform('size') * values
+    consecutive_years = max_consecutive.max()
+    return (valid_years >= 7) and (consecutive_years >= 5)# Filter firm names that meet both Scope 1 and Scope 2 criteria
+scope1_ok = set(scope1_us[scope1_us.apply(check_scope, axis=1)]["Firm_Name"])
+scope2_ok = set(scope2_us[scope2_us.apply(check_scope, axis=1)]["Firm_Name"])
+solid_names = scope1_ok & scope2_ok  
+# Intersection of firm names meeting ESG criteria
+# ------------------------------
+# STEP 2 – LOAD FINANCIAL DATA
+# ------------------------------
+
+# Load price data
+raw_prices = pd.read_excel(base_url + "DS_RI_T_USD_M.xlsx")
+prices = raw_prices.set_index("ISIN").transpose()
+prices.index = pd.to_datetime(prices.index, format="%Y-%m-%d", errors="coerce")
+
+# Replace ISIN columns with firm names
+prices.columns = prices.columns.map(isin_to_name)
+
+# Load market cap data
+raw_mkt_caps = pd.read_excel(base_url + "DS_MV_T_USD_M.xlsx")
+mkt_caps = raw_mkt_caps.set_index("ISIN").transpose()
+mkt_caps.index = pd.to_datetime(mkt_caps.index, format="%Y-%m-%d", errors="coerce")
+
+# Replace ISIN columns with firm names
+mkt_caps.columns = mkt_caps.columns.map(isin_to_name)
+
+# Load and transform revenue data
+raw_revenues = pd.read_excel(base_url + "DS_REV_USD_Y.xlsx")
+year_cols = [col for col in raw_revenues.columns if str(col).isdigit()]
+revenues_long = raw_revenues.melt(
+    id_vars=["ISIN"],
+    value_vars=year_cols,
+    var_name="Year",
+    value_name="Revenue"
+)
+revenues_long["Date"] = pd.to_datetime(revenues_long["Year"], format="%Y") + pd.offsets.YearEnd(0)
+revenues = revenues_long.pivot(index="Date", columns="ISIN", values="Revenue")
+
+# Using backward-filling to assign annual revenue to months within the year
+revenues = revenues.resample("M").bfill()# Replace ISIN columns with firm names
+revenues.columns = revenues.columns.map(isin_to_name)
+
+# Load risk-free rate
+rf_df = pd.read_excel(base_url + "Risk_Free_Rate.xlsx")
+rf_df.columns = ["DateRaw", "RF"]
+rf_df["Date"] = pd.to_datetime(rf_df["DateRaw"].astype(str), format="%Y%m")
+rf_df.set_index("Date", inplace=True)
+rf_series = rf_df["RF"] / 100
+
+# ------------------------------
+# STEP 3 – ALIGN AND CLEAN DATA
+# ------------------------------
+
+# Filter data to companies that passed ESG screen using firm names
+common_names = solid_names & set(prices.columns) & set(mkt_caps.columns) & set(revenues.columns)
+prices = prices[list(common_names)]
+mkt_caps = mkt_caps[list(common_names)]
+revenues = revenues[list(common_names)]
+
+# Clean: interpolate linearly, internally only
+prices = prices.replace(0, np.nan).apply(pd.to_numeric, errors="coerce")
+prices = prices.interpolate(method="linear", axis=0, limit_area="inside")mkt_caps = mkt_caps.replace(0, np.nan).apply(pd.to_numeric, errors="coerce")
+mkt_caps = mkt_caps.interpolate(method="linear", axis=0, limit_area="inside")revenues = revenues.replace(0, np.nan).apply(pd.to_numeric, errors="coerce")
+revenues = revenues.interpolate(method="linear", axis=0, limit_area="inside")
+
+# Diagnostics after ESG filtering
+print(" Data loading and ESG filtering complete.")
+print(f"Remaining firms after ESG filter: {len(common_names)}")
+
+# Additional filtering: Drop firms with >10% missing data after interpolation
+max_missing_ratio = 0.1
+for df in [prices, mkt_caps, revenues]:
+    missing_ratios = df.isna().mean()
+    firms_to_drop = missing_ratios[missing_ratios > max_missing_ratio].index
+    df.drop(columns=firms_to_drop, inplace=True)
+    
+# Update common_names to reflect dropped firms
+common_names = set(prices.columns) & set(mkt_caps.columns) & set(revenues.columns)
+prices = prices[list(common_names)]
+mkt_caps = mkt_caps[list(common_names)]
+revenues = revenues[list(common_names)]
+
+# Diagnostics after missing value filtering
+print(f"Remaining firms after missing value filtering: {len(common_names)}")
+
+# Calculate simple returns and handle NaNs
+simple_returns = prices.pct_change(fill_method=None)
+simple_returns = simple_returns.dropna()   
+
+# Drop rows with NaN returns# Check if risk-free rate covers the period of returns
+if not simple_returns.index.isin(rf_series.index).all():
+    print("Warning: Risk-free rate does not cover the entire period of returns.")
+    
+# Retain original first_available calculation
+first_available = simple_returns.notna().apply(lambda x: x[x].index.min())
+
+# ------------------------------
+# STEP 4 – NEW FACTOR MODEL FUNCTIONS
+# ------------------------------
+
+def construct_factors(returns, market_caps, revenues, risk_free_rate):
+    try:
+        #  Backward-fill revenue data (since it's annual) to align with monthly data
+        revenues = revenues.bfill(limit=11).ffill(limit=11)
+
+    # === Market (Mkt-RF) Factor ===
+    market_weights = market_caps.div(market_caps.sum(axis=1), axis=0)
+    market_return = (returns * market_weights).sum(axis=1)
+    excess_market_return = market_return - risk_free_rate
+
+    # === Size (SMB) Factor ===
+    market_cap_median = market_caps.median(axis=1)
+    small = returns[market_caps.lt(market_cap_median, axis=0)]
+    big = returns[market_caps.ge(market_cap_median, axis=0)]
+    smb = small.mean(axis=1) - big.mean(axis=1)
+
+    # === Value (HML) Factor ===
+    # Avoid divide-by-zero issues in revenue-to-market
+    safe_mkt_caps = market_caps.copy()
+    safe_mkt_caps[safe_mkt_caps <= 0] = np.nan
+    revenue_to_market = revenues.div(safe_mkt_caps)
+
+    rm_median = revenue_to_market.median(axis=1)
+    high_mask = revenue_to_market.gt(rm_median, axis=0)
+    low_mask = revenue_to_market.le(rm_median, axis=0)
+
+    # Require enough valid companies per group (e.g., ≥ 20)
+    high_valid = high_mask.sum(axis=1)
+    low_valid = low_mask.sum(axis=1)
+    valid_dates = (high_valid >= 20) & (low_valid >= 20)
+
+    if valid_dates.sum() == 0:
+        print("⚠️ No valid dates with enough high/low revenue-to-market splits for HML.")
+        hml = pd.Series(index=returns.index, data=np.nan)
+    else:
+        high_rm = returns.where(high_mask)
+        low_rm = returns.where(low_mask)
+        hml_raw = high_rm.mean(axis=1) - low_rm.mean(axis=1)
+        hml = hml_raw.where(valid_dates)
+
+    # === Combine all factors ===
+    factors = pd.DataFrame({
+        'Mkt-RF': excess_market_return,
+        'SMB': smb,
+        'HML': hml
+    }, index=returns.index)
+
+    # Fill gaps to avoid dropped rows later
+    factors = factors.ffill().bfill()
+
+    # === Diagnostics ===
+    print("Factor Construction Diagnostics:")
+    print("Revenue-to-Market: % NaN =", revenue_to_market.isna().mean().mean())
+    print("SMB - % NaN:", smb.isna().mean(), " | Std Dev:", smb.std())
+    print("HML - % NaN:", hml.isna().mean(), " | Std Dev:", hml.std())
+    print("Excess Mkt-RF - % NaN:", excess_market_return.isna().mean())
+    print("Factors constructed. Date range:", factors.index.min(), "to", factors.index.max())
+
+    return factors
+
+except Exception as e:
+    print("Error in construct_factors:", e)
+    print("returns shape:", returns.shape)
+    print("market_caps shape:", market_caps.shape)
+    print("revenues shape:", revenues.shape)
+    print("risk_free_rate shape:", risk_free_rate.shape)
+    return pd.DataFrame()
+
+def estimate_factor_loadings(returns, factors):
+    betas = {}
+    residuals = {}
+    for company in returns.columns:
+        y = returns[company].dropna()
+        X = factors.loc[y.index]
+        common_index = X.dropna().index.intersection(y.index)
+        X = X.loc[common_index]
+        y = y.loc[common_index]
+        y = y.loc[X.index]
+        if len(y) < 60:
+            betas[company] = np.full(len(factors.columns), np.nan)
+            residuals[company] = np.nan
+            continue
+        X = np.column_stack([np.ones(len(X)), X])
+        beta = np.linalg.lstsq(X, y, rcond=None)[0]
+        betas[company] = beta[1:]
+        residuals[company] = y - X @ beta
+    return betas, residualsdef compute_factor_cov_matrix(returns, factors):
+    betas, residuals = estimate_factor_loadings(returns, factors)
+    companies = [c for c in betas if not np.isnan(betas[c]).any()]
+
+if not companies:
+    print("⚠️ No valid companies after filtering for betas.")
+    return np.array([]), []
+
+B = np.array([betas[c] for c in companies])
+print("B shape:", B.shape)
+print("Factors shape:", factors.shape)
+
+factor_sub = factors.loc[returns.index].dropna()
+if len(factor_sub) < 2:
+    print("❌ Not enough data to compute factor covariance matrix.")
+    return np.array([]), []
+
+F = np.cov(factor_sub.T, ddof=1)
+
+# Fix for single-factor model: ensure F is 2D
+if F.ndim == 0:
+    F = np.array([[F]])
+elif F.ndim == 1:
+    F = F.reshape((1, 1))
+
+print("Corrected F shape:", F.shape)
+
+D = np.diag([np.var(residuals[c], ddof=1) for c in companies])
+
+cov_matrix = B @ F @ B.T + D
+return cov_matrix, companies
+
+# ------------------------------
+# STEP 5 – MVP WEIGHT FUNCTION
+# ------------------------------
+
+def compute_mvp_weights(returns_window, mkt_caps_window, revenues_window, rf_window, method='lw',
+                        max_weight=0.05, prev_weights=None, turnover_limit=None, transaction_cost=None):
+    """Compute Minimum Variance Portfolio weights using specified method."""
+    sufficient_data = returns_window.count() >= 120
+    returns_window = returns_window.loc[:, sufficient_data].dropna(axis=1, how="any")
+    mkt_caps_window = mkt_caps_window.loc[:, sufficient_data].reindex(returns_window.index, method='ffill')
+    revenues_window = revenues_window.loc[:, sufficient_data].reindex(returns_window.index, method='ffill')
+    rf_window = rf_window.reindex(returns_window.index, method='ffill').fillna(0)
+
+if returns_window.shape[1] < 2:
+    return pd.Series(np.nan)
+
+assets = returns_window.columns
+n = len(assets)
+
+# Covariance matrix estimation
+if method == 'lw':
+    lw = LedoitWolf()
+    lw.fit(returns_window)
+    cov_matrix = lw.covariance_
+
+elif method == 'pinv':
+    cov_matrix = np.cov(returns_window.values, rowvar=False)
+    cov_pinv = np.linalg.pinv(cov_matrix)
+    ones = np.ones(n)
+    weights = cov_pinv @ ones / (ones.T @ cov_pinv @ ones)
+    return pd.Series(weights, index=assets)
+
+elif method == 'factor_1':
+    factors = construct_factors(returns_window, mkt_caps_window, revenues_window, rf_window)[['Mkt-RF']]
+    cov_matrix, companies = compute_factor_cov_matrix(returns_window[assets], factors)
+    if not companies:
+        print("⚠️ Skipping optimization: No valid assets for factor_1")
+        return pd.Series(np.nan)
+    assets = companies
+
+elif method == 'factor_3':
+    factors = construct_factors(returns_window, mkt_caps_window, revenues_window, rf_window)
+    cov_matrix, companies = compute_factor_cov_matrix(returns_window[assets], factors)
+    if not companies:
+        print("⚠️ Skipping optimization: No valid assets for factor_3")
+        return pd.Series(np.nan)
+    assets = companies
+
+elif method == 'identity':
+    sample_cov = np.cov(returns_window.values, rowvar=False)
+    avg_var = np.trace(sample_cov) / n
+    identity = np.eye(n) * avg_var
+    shrinkage_intensity = 0.2
+    cov_matrix = (1 - shrinkage_intensity) * sample_cov + shrinkage_intensity * identity
+
+else:
+    raise ValueError("Method must be 'lw', 'pinv', 'factor_1', 'factor_3', or 'identity'.")
+
+# Optimization
+w = cp.Variable(len(assets))
+constraints = [cp.sum(w) == 1, w >= 0]
+if max_weight:
+    constraints.append(w <= max_weight)
+if turnover_limit and prev_weights is not None:
+    aligned_prev = prev_weights.reindex(assets).fillna(0).values
+    constraints.append(cp.norm1(w - aligned_prev) <= turnover_limit)
+
+objective = cp.Minimize(cp.quad_form(w, cp.psd_wrap(cov_matrix)))
+if transaction_cost and prev_weights is not None:
+    aligned_prev = prev_weights.reindex(assets).fillna(0).values
+    trade_cost = transaction_cost * cp.norm1(w - aligned_prev)
+    objective = cp.Minimize(cp.quad_form(w, cp.psd_wrap(cov_matrix)) + trade_cost)
+
+prob = cp.Problem(objective, constraints)
+prob.solve()
+
+return pd.Series(w.value, index=assets) if w.value is not None else pd.Series(np.nan, index=assets)
+
+
+# Compute first_available: first date with valid data for each asset
+first_available = simple_returns.apply(lambda x: x.first_valid_index())
 
 # ------------------------------
 # STEP 6 – ROLLING OPTIMIZATION
