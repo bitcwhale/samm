@@ -137,8 +137,8 @@ revenues = revenues[list(common_names)]
 print(f"Remaining firms after missing value filtering: {len(common_names)}")
 
 # Calculate simple returns and handle NaNs
-simple_returns = np.log(prices / prices.shift(1)).dropna()
-simple_returns = simple_returns.dropna()  # Drop rows with NaN returns
+simple_returns = prices.pct_change(fill_method=None)
+simple_returns = simple_returns.dropna()   # Drop rows with NaN returns
 
 # Check if risk-free rate covers the period of returns
 if not simple_returns.index.isin(rf_series.index).all():
