@@ -495,7 +495,7 @@ for method, series in mvp_series_all.items():
     if not series.dropna().empty:
         (1 + series).cumprod().plot(label=f"MVP ({method})")
 (1 + vw_series).cumprod().plot(label="VW Portfolio")
-plt.title("Cumulative Returns (2014–2024)")
+plt.title("Cumulative Returns (2013–2023)")
 plt.xlabel("Date")
 plt.ylabel("Portfolio Value")
 plt.grid(True)
@@ -583,7 +583,7 @@ method = 'lw'
 carbon_footprints = {}
 waci_values = {}
 
-for Y in range(2013, 2025):  # From 2013 to 2025
+for Y in range(2013, 2023):  # From 2013 to 2023
     # Get weights from previous year (weights for year Y are set at end of Y-1)
     weights_Y_minus_1 = mvp_weights_all[method].get(Y - 1, pd.Series())
     if weights_Y_minus_1.empty:
@@ -645,7 +645,7 @@ for year, waci in waci_values.items():
 plt.figure(figsize=(10, 6))
 plt.plot(list(carbon_footprints.keys()), list(carbon_footprints.values()), marker='o', label='Carbon Footprint (tons CO2e per million USD invested)')
 plt.plot(list(waci_values.keys()), list(waci_values.values()), marker='s', label='WACI (tons CO2e per million USD of revenue)')
-plt.title("Carbon Footprint and WACI for P_mv_oos (2014–2023)")
+plt.title("Carbon Footprint and WACI for P_mv_oos (2013–2023)")
 plt.xlabel("Year")
 plt.ylabel("Metrics (tons CO2e per million USD)")
 plt.grid(True)
@@ -660,7 +660,7 @@ plt.show()
 
 # Compute c_Y vectors for each year (E_{i,Y} / Cap_{i,Y})
 c_vectors = {}
-for Y in range(2013, 2024):
+for Y in range(2013, 2023):
     emissions_Y = emissions_long[emissions_long['Year'] == Y].set_index('Firm_Name')['E']
     if Y not in mkt_caps_annual.index:
         continue
@@ -765,7 +765,7 @@ metrics['constrained'] = compute_metrics(mvp_series_constrained, rf_aligned)
 
 # Compute carbon footprints for constrained portfolio (for verification)
 carbon_footprints_constrained = {}
-for Y in range(2014, 2025):
+for Y in range(2013, 2023):
     weights_Y_minus_1 = mvp_weights_constrained.get(Y - 1, pd.Series())
     if weights_Y_minus_1.empty:
         continue
@@ -800,7 +800,7 @@ plt.figure(figsize=(12, 6))
 (1 + mvp_series_all['lw']).cumprod().plot(label="Original MVP (lw)")
 (1 + mvp_series_constrained).cumprod().plot(label="Constrained MVP (lw, 0.5 CF)")
 (1 + vw_series).cumprod().plot(label="VW Portfolio")
-plt.title("Cumulative Returns Comparison (2014–2024)")
+plt.title("Cumulative Returns Comparison (2013–2023)")
 plt.xlabel("Date")
 plt.ylabel("Portfolio Value")
 plt.grid(True)
@@ -812,7 +812,7 @@ plt.show()
 plt.figure(figsize=(10, 6))
 plt.plot(list(carbon_footprints_original.keys()), list(carbon_footprints_original.values()), marker='o', label='Original MVP CF')
 plt.plot(list(carbon_footprints_constrained.keys()), list(carbon_footprints_constrained.values()), marker='s', label='Constrained MVP CF (0.5)')
-plt.title("Carbon Footprint Comparison (2014–2023)")
+plt.title("Carbon Footprint Comparison (2013–2023)")
 plt.xlabel("Year")
 plt.ylabel("Carbon Footprint (tons CO2e per million USD)")
 plt.grid(True)
@@ -849,7 +849,7 @@ def compute_vw_weights(mkt_caps_annual, year):
 
 # Compute benchmark carbon footprint for each year
 benchmark_cf = {}
-for Y in range(2013, 2024):
+for Y in range(2013, 2023):
     emissions_Y = emissions_long[emissions_long['Year'] == Y].set_index('Firm_Name')['E']
     if Y not in mkt_caps_annual.index:
         print(f"Skipping year {Y}: No market cap data")
@@ -991,7 +991,7 @@ metrics['tracking_0.5'] = compute_metrics(tracking_series, rf_aligned)
 
 # Compute carbon footprints for verification
 carbon_footprints_tracking = {}
-for Y in range(2014, 2025):
+for Y in range(2013, 2023):
     weights_Y_minus_1 = tracking_weights.get(Y - 1, pd.Series())
     if weights_Y_minus_1.empty:
         continue
@@ -1023,7 +1023,7 @@ print(metrics_df.to_string(formatters={k: "{:.4f}".format for k in metric_names}
 plt.figure(figsize=(12, 6))
 (1 + vw_series).cumprod().plot(label="VW Portfolio")
 (1 + tracking_series).cumprod().plot(label="Tracking Portfolio (0.5 CF)")
-plt.title("Cumulative Returns Comparison (2014–2024)")
+plt.title("Cumulative Returns Comparison (2013–2023)")
 plt.xlabel("Date")
 plt.ylabel("Portfolio Value")
 plt.grid(True)
@@ -1035,7 +1035,7 @@ plt.show()
 plt.figure(figsize=(10, 6))
 plt.plot(list(benchmark_cf.keys()), list(benchmark_cf.values()), marker='o', label='Benchmark CF')
 plt.plot(list(carbon_footprints_tracking.keys()), list(carbon_footprints_tracking.values()), marker='s', label='Tracking Portfolio CF (0.5)')
-plt.title("Carbon Footprint Comparison (2014–2023)")
+plt.title("Carbon Footprint Comparison (2013–2023)")
 plt.xlabel("Year")
 plt.ylabel("Carbon Footprint (tons CO2e per million USD)")
 plt.grid(True)
@@ -1093,7 +1093,7 @@ metrics_dict = {
 metrics_df = pd.DataFrame.from_dict(metrics_dict, orient='index', columns=metric_names)
 
 # Display financial performance comparison
-print("\n=== Financial Performance Comparison (2014–2024) ===")
+print("\n=== Financial Performance Comparison (2013–2023) ===")
 print(metrics_df.to_string(formatters={k: "{:.4f}".format for k in metric_names}))
 
 # Carbon footprint comparison DataFrames
@@ -1126,7 +1126,7 @@ plt.figure(figsize=(12, 6))
 (1 + mvp_series_constrained).cumprod().plot(label="P_oos^(mv)(0.5)")
 (1 + vw_series).cumprod().plot(label="P^(vw)")
 (1 + tracking_series).cumprod().plot(label="P_oos^(vw)(0.5)")
-plt.title("Cumulative Returns Comparison (2014–2024)")
+plt.title("Cumulative Returns Comparison (2013–2023)")
 plt.xlabel("Date")
 plt.ylabel("Portfolio Value")
 plt.grid(True)
@@ -1140,7 +1140,7 @@ plt.plot(cf_mv_df.index, cf_mv_df["P_oos^(mv)"], marker='o', label="P_oos^(mv) C
 plt.plot(cf_mv_df.index, cf_mv_df["P_oos^(mv)(0.5)"], marker='s', label="P_oos^(mv)(0.5) CF")
 plt.plot(cf_vw_df.index, cf_vw_df["P^(vw)"], marker='^', label="P^(vw) CF")
 plt.plot(cf_vw_df.index, cf_vw_df["P_oos^(vw)(0.5)"], marker='d', label="P_oos^(vw)(0.5) CF")
-plt.title("Carbon Footprint Comparison (2014–2023)")
+plt.title("Carbon Footprint Comparison (2013–2023)")
 plt.xlabel("Year")
 plt.ylabel("Carbon Footprint (tons CO2e per million USD)")
 plt.grid(True)
@@ -1268,7 +1268,7 @@ metrics_df = pd.DataFrame.from_dict(metrics, orient='index', columns=metric_name
 
 # Compute carbon footprints for NZ portfolio (verification)
 carbon_footprints_nz = {}
-for Y in range(2013, 2024):  # From 2013 to 2023, using weights from Y-1 for year Y
+for Y in range(2013, 2023):  # From 2013 to 2023, using weights from Y-1 for year Y
     weights_Y_minus_1 = nz_weights.get(Y - 1, pd.Series())
     if weights_Y_minus_1.empty or weights_Y_minus_1.isna().all():
         continue
@@ -1304,7 +1304,7 @@ plt.figure(figsize=(12, 6))
 (1 + vw_series).cumprod().plot(label="VW Portfolio")
 if not nz_series.empty:
     (1 + nz_series).cumprod().plot(label="NZ Portfolio")
-plt.title("Cumulative Returns: VW vs NZ Portfolio (2014–2024)")
+plt.title("Cumulative Returns: VW vs NZ Portfolio (2013–2023)")
 plt.xlabel("Date")
 plt.ylabel("Portfolio Value")
 plt.grid(True)
