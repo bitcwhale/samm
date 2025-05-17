@@ -6,8 +6,9 @@ import datetime
 import os
 from sklearn.covariance import LedoitWolf
 import cvxpy as cp
-from sklearn.decomposition import PCA# Define base URL for GitHub raw data files
+from sklearn.decomposition import PCA
 
+# Define base URL for GitHub raw data files
 base_url = "https://raw.githubusercontent.com/bitcwhale/samm/main/"
 
 # ------------------------------
@@ -16,16 +17,16 @@ base_url = "https://raw.githubusercontent.com/bitcwhale/samm/main/"
 
 # Load static info and filter for AMER region
 static_df = pd.read_excel(base_url + "Static.xlsx")
-static_df.columns = static_df.columns.str.strip()  
+static_df.columns = static_df.columns.str.strip()  # Remove leading/trailing spaces
 
-# Remove leading/trailing spaces# Create a mapping from ISIN to firm name
+# Create a mapping from ISIN to firm name
 isin_to_name = static_df.set_index('ISIN')['Name'].to_dict()
 
 # Filter for AMER region using firm names instead of ISINs
 amer_df = static_df[static_df["Region"] == "AMER"]
-amer_names = set(amer_df["Name"].unique())  
+amer_names = set(amer_df["Name"].unique())  # Get unique firm names in AMER region
 
-# Get unique firm names in AMER region# Load Scope 1 and Scope 2 emissions
+# Load Scope 1 and Scope 2 emissions
 scope1_df = pd.read_excel(base_url + "Scope_1.xlsx")
 scope2_df = pd.read_excel(base_url + "Scope_2.xlsx")
 
@@ -44,13 +45,13 @@ def check_scope(row):
     valid_years = values.sum()
     max_consecutive = values.groupby((values != values.shift()).cumsum()).transform('size') * values
     consecutive_years = max_consecutive.max()
-    return (valid_years >= 7) and (consecutive_years >= 5)# Filter firm names that meet both Scope 1 and Scope 2 criteria
-    
+    return (valid_years >= 7) and (consecutive_years >= 5)
+
+# Filter firm names that meet both Scope 1 and Scope 2 criteria
 scope1_ok = set(scope1_us[scope1_us.apply(check_scope, axis=1)]["Firm_Name"])
 scope2_ok = set(scope2_us[scope2_us.apply(check_scope, axis=1)]["Firm_Name"])
-solid_names = scope1_ok & scope2_ok  
+solid_names = scope1_ok & scope2_ok  # Intersection of firm names meeting ESG criteria
 
-# Intersection of firm names meeting ESG criteria
 # ------------------------------
 # STEP 2 – LOAD FINANCIAL DATA
 # ------------------------------
@@ -82,9 +83,10 @@ revenues_long = raw_revenues.melt(
 )
 revenues_long["Date"] = pd.to_datetime(revenues_long["Year"], format="%Y") + pd.offsets.YearEnd(0)
 revenues = revenues_long.pivot(index="Date", columns="ISIN", values="Revenue")
-
 # Using backward-filling to assign annual revenue to months within the year
-revenues = revenues.resample("M").bfill()# Replace ISIN columns with firm names
+revenues = revenues.resample("M").bfill()
+
+# Replace ISIN columns with firm names
 revenues.columns = revenues.columns.map(isin_to_name)
 
 # Load risk-free rate
@@ -107,13 +109,15 @@ revenues = revenues[list(common_names)]
 # Clean: interpolate linearly, internally only
 prices = prices.replace(0, np.nan).apply(pd.to_numeric, errors="coerce")
 prices = prices.interpolate(method="linear", axis=0, limit_area="inside")
+
 mkt_caps = mkt_caps.replace(0, np.nan).apply(pd.to_numeric, errors="coerce")
 mkt_caps = mkt_caps.interpolate(method="linear", axis=0, limit_area="inside")
+
 revenues = revenues.replace(0, np.nan).apply(pd.to_numeric, errors="coerce")
 revenues = revenues.interpolate(method="linear", axis=0, limit_area="inside")
 
 # Diagnostics after ESG filtering
-print(" Data loading and ESG filtering complete.")
+print("✅ Data loading and ESG filtering complete.")
 print(f"Remaining firms after ESG filter: {len(common_names)}")
 
 # Additional filtering: Drop firms with >10% missing data after interpolation
@@ -122,7 +126,7 @@ for df in [prices, mkt_caps, revenues]:
     missing_ratios = df.isna().mean()
     firms_to_drop = missing_ratios[missing_ratios > max_missing_ratio].index
     df.drop(columns=firms_to_drop, inplace=True)
-    
+
 # Update common_names to reflect dropped firms
 common_names = set(prices.columns) & set(mkt_caps.columns) & set(revenues.columns)
 prices = prices[list(common_names)]
@@ -134,12 +138,12 @@ print(f"Remaining firms after missing value filtering: {len(common_names)}")
 
 # Calculate simple returns and handle NaNs
 simple_returns = prices.pct_change(fill_method=None)
-simple_returns = simple_returns.dropna()   
+simple_returns = simple_returns.dropna()  # Drop rows with NaN returns
 
-# Drop rows with NaN returns# Check if risk-free rate covers the period of returns
+# Check if risk-free rate covers the period of returns
 if not simple_returns.index.isin(rf_series.index).all():
     print("Warning: Risk-free rate does not cover the entire period of returns.")
-    
+
 # Retain original first_available calculation
 first_available = simple_returns.notna().apply(lambda x: x[x].index.min())
 
@@ -147,22 +151,7 @@ first_available = simple_returns.notna().apply(lambda x: x[x].index.min())
 # STEP 4 – NEW FACTOR MODEL FUNCTIONS
 # ------------------------------
 
-import pandas as pd
-import numpy as np
-
 def construct_factors(returns, market_caps, revenues, risk_free_rate):
-    """
-    Constructs factor returns (Mkt-RF, SMB, HML) from input data.
-    
-    Parameters:
-        returns (pd.DataFrame): Asset returns
-        market_caps (pd.DataFrame): Market capitalizations
-        revenues (pd.DataFrame): Revenue data
-        risk_free_rate (pd.Series): Risk-free rate
-        
-    Returns:
-        pd.DataFrame: Constructed factors
-    """
     try:
         # Backward-fill revenue data (since it's annual) to align with monthly data
         revenues = revenues.bfill(limit=11).ffill(limit=11)
@@ -231,17 +220,6 @@ def construct_factors(returns, market_caps, revenues, risk_free_rate):
         return pd.DataFrame()
 
 def estimate_factor_loadings(returns, factors):
-    """
-    Estimates factor loadings (betas) and residuals for each company.
-    
-    Parameters:
-        returns (pd.DataFrame): Asset returns
-        factors (pd.DataFrame): Factor returns
-        
-    Returns:
-        dict: Betas for each company
-        dict: Residuals for each company
-    """
     betas = {}
     residuals = {}
     for company in returns.columns:
@@ -250,28 +228,18 @@ def estimate_factor_loadings(returns, factors):
         common_index = X.dropna().index.intersection(y.index)
         X = X.loc[common_index]
         y = y.loc[common_index]
+        y = y.loc[X.index]
         if len(y) < 60:
             betas[company] = np.full(len(factors.columns), np.nan)
             residuals[company] = np.nan
             continue
         X = np.column_stack([np.ones(len(X)), X])
         beta = np.linalg.lstsq(X, y, rcond=None)[0]
-        betas[company] = beta[1:]  # Exclude intercept
+        betas[company] = beta[1:]
         residuals[company] = y - X @ beta
     return betas, residuals
 
 def compute_factor_cov_matrix(returns, factors):
-    """
-    Computes the factor-based covariance matrix.
-    
-    Parameters:
-        returns (pd.DataFrame): Asset returns
-        factors (pd.DataFrame): Factor returns
-        
-    Returns:
-        np.ndarray: Covariance matrix
-        list: List of valid companies
-    """
     betas, residuals = estimate_factor_loadings(returns, factors)
     companies = [c for c in betas if not np.isnan(betas[c]).any()]
 
@@ -304,94 +272,84 @@ def compute_factor_cov_matrix(returns, factors):
     return cov_matrix, companies
 
 # ------------------------------
-# STEP 5 – MVP WEIGHT FUNCTION
+# STEP 5 – MVP WEIGHT FUNCTION (UNCONSTRAINED)
 # ------------------------------
 
 def compute_mvp_weights(returns_window, mkt_caps_window, revenues_window, rf_window, method='lw',
                         max_weight=0.05, prev_weights=None, turnover_limit=None, transaction_cost=None):
-    """Compute Minimum Variance Portfolio weights using specified method."""
+    """Compute Minimum Variance Portfolio weights using specified method (unconstrained)."""
     sufficient_data = returns_window.count() >= 120
     returns_window = returns_window.loc[:, sufficient_data].dropna(axis=1, how="any")
     mkt_caps_window = mkt_caps_window.loc[:, sufficient_data].reindex(returns_window.index, method='ffill')
     revenues_window = revenues_window.loc[:, sufficient_data].reindex(returns_window.index, method='ffill')
     rf_window = rf_window.reindex(returns_window.index, method='ffill').fillna(0)
 
-if returns_window.shape[1] < 2:
-    return pd.Series(np.nan)
-
-assets = returns_window.columns
-n = len(assets)
-
-# Covariance matrix estimation
-if method == 'lw':
-    lw = LedoitWolf()
-    lw.fit(returns_window)
-    cov_matrix = lw.covariance_
-
-elif method == 'pinv':
-    cov_matrix = np.cov(returns_window.values, rowvar=False)
-    cov_pinv = np.linalg.pinv(cov_matrix)
-    ones = np.ones(n)
-    weights = cov_pinv @ ones / (ones.T @ cov_pinv @ ones)
-    return pd.Series(weights, index=assets)
-
-elif method == 'factor_1':
-    factors = construct_factors(returns_window, mkt_caps_window, revenues_window, rf_window)[['Mkt-RF']]
-    cov_matrix, companies = compute_factor_cov_matrix(returns_window[assets], factors)
-    if not companies:
-        print("⚠️ Skipping optimization: No valid assets for factor_1")
+    if returns_window.shape[1] < 2:
         return pd.Series(np.nan)
-    assets = companies
 
-elif method == 'factor_3':
-    factors = construct_factors(returns_window, mkt_caps_window, revenues_window, rf_window)
-    cov_matrix, companies = compute_factor_cov_matrix(returns_window[assets], factors)
-    if not companies:
-        print("⚠️ Skipping optimization: No valid assets for factor_3")
-        return pd.Series(np.nan)
-    assets = companies
+    assets = returns_window.columns
+    n = len(assets)
 
-elif method == 'identity':
-    sample_cov = np.cov(returns_window.values, rowvar=False)
-    avg_var = np.trace(sample_cov) / n
-    identity = np.eye(n) * avg_var
-    shrinkage_intensity = 0.2
-    cov_matrix = (1 - shrinkage_intensity) * sample_cov + shrinkage_intensity * identity
+    # Covariance matrix estimation
+    if method == 'lw':
+        lw = LedoitWolf()
+        lw.fit(returns_window)
+        cov_matrix = lw.covariance_
+    elif method == 'pinv':
+        cov_matrix = np.cov(returns_window.values, rowvar=False)
+        cov_pinv = np.linalg.pinv(cov_matrix)
+        ones = np.ones(n)
+        weights = cov_pinv @ ones / (ones.T @ cov_pinv @ ones)
+        return pd.Series(weights, index=assets)
+    elif method == 'factor_1':
+        factors = construct_factors(returns_window, mkt_caps_window, revenues_window, rf_window)[['Mkt-RF']]
+        cov_matrix, companies = compute_factor_cov_matrix(returns_window[assets], factors)
+        if not companies:
+            print("⚠️ Skipping optimization: No valid assets for factor_1")
+            return pd.Series(np.nan)
+        assets = companies
+    elif method == 'factor_3':
+        factors = construct_factors(returns_window, mkt_caps_window, revenues_window, rf_window)
+        cov_matrix, companies = compute_factor_cov_matrix(returns_window[assets], factors)
+        if not companies:
+            print("⚠️ Skipping optimization: No valid assets for factor_3")
+            return pd.Series(np.nan)
+        assets = companies
+    elif method == 'identity':
+        sample_cov = np.cov(returns_window.values, rowvar=False)
+        avg_var = np.trace(sample_cov) / n
+        identity = np.eye(n) * avg_var
+        shrinkage_intensity = 0.2
+        cov_matrix = (1 - shrinkage_intensity) * sample_cov + shrinkage_intensity * identity
+    else:
+        raise ValueError("Method must be 'lw', 'pinv', 'factor_1', 'factor_3', or 'identity'.")
 
-else:
-    raise ValueError("Method must be 'lw', 'pinv', 'factor_1', 'factor_3', or 'identity'.")
+    # Optimization
+    w = cp.Variable(len(assets))
+    constraints = [cp.sum(w) == 1, w >= 0]
+    if max_weight:
+        constraints.append(w <= max_weight)
+    if turnover_limit and prev_weights is not None:
+        aligned_prev = prev_weights.reindex(assets).fillna(0).values
+        constraints.append(cp.norm1(w - aligned_prev) <= turnover_limit)
 
-# Optimization
-w = cp.Variable(len(assets))
-constraints = [cp.sum(w) == 1, w >= 0]
-if max_weight:
-    constraints.append(w <= max_weight)
-if turnover_limit and prev_weights is not None:
-    aligned_prev = prev_weights.reindex(assets).fillna(0).values
-    constraints.append(cp.norm1(w - aligned_prev) <= turnover_limit)
+    objective = cp.Minimize(cp.quad_form(w, cp.psd_wrap(cov_matrix)))
+    if transaction_cost and prev_weights is not None:
+        aligned_prev = prev_weights.reindex(assets).fillna(0).values
+        trade_cost = transaction_cost * cp.norm1(w - aligned_prev)
+        objective = cp.Minimize(cp.quad_form(w, cp.psd_wrap(cov_matrix)) + trade_cost)
 
-objective = cp.Minimize(cp.quad_form(w, cp.psd_wrap(cov_matrix)))
-if transaction_cost and prev_weights is not None:
-    aligned_prev = prev_weights.reindex(assets).fillna(0).values
-    trade_cost = transaction_cost * cp.norm1(w - aligned_prev)
-    objective = cp.Minimize(cp.quad_form(w, cp.psd_wrap(cov_matrix)) + trade_cost)
+    prob = cp.Problem(objective, constraints)
+    prob.solve()
 
-prob = cp.Problem(objective, constraints)
-prob.solve()
-
-return pd.Series(w.value, index=assets) if w.value is not None else pd.Series(np.nan, index=assets)
-
-
-# Compute first_available: first date with valid data for each asset
-first_available = simple_returns.apply(lambda x: x.first_valid_index())
+    return pd.Series(w.value, index=assets) if w.value is not None else pd.Series(np.nan, index=assets)
 
 # ------------------------------
 # STEP 6 – ROLLING OPTIMIZATION
 # ------------------------------
 
-# Adjust start_year to 2012 to include 2013 returns
-start_year = 2012  # Weights for 2013 returns
-end_year = 2023    # Weights for 2024 returns
+start_year = 2013
+end_year = 2023
 methods = ['lw', 'pinv', 'factor_1', 'factor_3', 'identity']
 mvp_weights_all = {}
 
@@ -401,7 +359,7 @@ for method in methods:
     for year in range(start_year, end_year + 1):
         window_start = pd.Timestamp(f"{year - 10}-01-01")
         window_end = pd.Timestamp(f"{year - 1}-12-31")
-        
+
         eligible_assets = first_available[first_available <= window_start].index
         returns_window = simple_returns[(simple_returns.index >= window_start) &
                                         (simple_returns.index <= window_end)][eligible_assets]
@@ -424,31 +382,26 @@ for method in methods:
 # STEP 7 – EX-POST RETURNS
 # ------------------------------
 
-def compute_portfolio_returns(returns_df, weights_dict=None, mkt_caps_df=None, mode='mvp', start_date=None, end_date=None):
-    """Compute portfolio returns for MVP or VW portfolios within a specified date range."""
-    if start_date is None:
-        start_date = returns_df.index.min()
-    if end_date is None:
-        end_date = returns_df.index.max()
-    
-    R = returns_df[(returns_df.index >= start_date) & (returns_df.index <= end_date)]
+def compute_portfolio_returns(returns_df, weights_dict=None, mkt_caps_df=None, mode='mvp'):
+    """Compute portfolio returns for MVP or VW portfolios."""
     returns = []
     dates = []
 
-    if mode == 'mvp':
-        if weights_dict is None:
-            raise ValueError("weights_dict must be provided for mode='mvp'")
-        years = sorted(weights_dict.keys())
-        for year in years:
+    for year in range(start_year, end_year + 1):
+        start = pd.Timestamp(f"{year + 1}-01-01")
+        end = pd.Timestamp(f"{year + 1}-12-31")
+        R = returns_df[(returns_df.index >= start) & (returns_df.index <= end)]
+
+        if mode == 'mvp':
             alpha = weights_dict.get(year)
             if alpha is None or alpha.empty:
                 continue
             alpha = alpha / alpha.sum()
-            next_year_start = pd.Timestamp(f"{year + 1}-01-01")
-            next_year_end = pd.Timestamp(f"{year + 1}-12-31")
-            R_year = R[(R.index >= next_year_start) & (R.index <= next_year_end)]
-            for date in R_year.index:
-                r_t = R_year.loc[date]
+
+        for date in R.index:
+            r_t = R.loc[date]
+
+            if mode == 'mvp':
                 common_assets = alpha.index.intersection(r_t.index)
                 if len(common_assets) < 2:
                     continue
@@ -459,40 +412,74 @@ def compute_portfolio_returns(returns_df, weights_dict=None, mkt_caps_df=None, m
                 alpha = w * (1 + r_t)
                 if ret_p != -1:
                     alpha = alpha / (1 + ret_p)
-                dates.append(date)
-    
-    elif mode == 'vw':
-        if mkt_caps_df is None:
-            raise ValueError("mkt_caps_df must be provided for mode='vw'")
-        for date in R.index:
-            r_t = R.loc[date]
-            mc_t_shifted = mkt_caps_df.shift(1).loc[date]
-            if mc_t_shifted.isna().all():
-                continue
-            common_assets = r_t.index.intersection(mc_t_shifted.index)
-            if len(common_assets) < 2:
-                continue
-            r_t = r_t[common_assets].fillna(0)
-            mc_weights = mc_t_shifted[common_assets] / mc_t_shifted[common_assets].sum()
-            ret_p = np.dot(mc_weights.fillna(0), r_t)
-            returns.append(ret_p)
+
+            elif mode == 'vw':
+                mc_t_shifted = mkt_caps_df.shift(1).loc[date]
+                if mc_t_shifted.isna().all():
+                    continue
+                common_assets = r_t.index.intersection(mc_t_shifted.index)
+                if len(common_assets) < 2:
+                    continue
+                r_t = r_t[common_assets].fillna(0)
+                mc_weights = mc_t_shifted[common_assets] / mc_t_shifted[common_assets].sum()
+                ret_p = np.dot(mc_weights.fillna(0), r_t)
+                returns.append(ret_p)
+
             dates.append(date)
-    
-    else:
-        raise ValueError("Mode must be 'mvp' or 'vw'")
-    
+
     return pd.Series(returns, index=pd.to_datetime(dates))
 
-# Compute VW portfolio returns from 2013 to 2024
-vw_start_date = pd.Timestamp("2013-01-01")
-vw_end_date = pd.Timestamp("2024-12-31")
-vw_series = compute_portfolio_returns(simple_returns, mkt_caps_df=mkt_caps, mode='vw', 
-                                      start_date=vw_start_date, end_date=vw_end_date)
-
-# Compute MVP returns from 2013 to 2024 (weights from 2012 to 2023)
-mvp_series_all = {method: compute_portfolio_returns(simple_returns, mvp_weights_all[method], mode='mvp',
-                                                    start_date=vw_start_date, end_date=vw_end_date)
+# Compute returns for all portfolios
+mvp_series_all = {method: compute_portfolio_returns(simple_returns, mvp_weights_all[method], mode='mvp')
                   for method in methods}
+vw_series = compute_portfolio_returns(simple_returns, mkt_caps_df=mkt_caps, mode='vw')
+
+# ------------------------------
+# STEP 8 – PERFORMANCE METRICS
+# ------------------------------
+
+rf_aligned = rf_series.reindex(vw_series.index, method="ffill")
+
+def compute_metrics(r, rf):
+    """Calculate portfolio performance metrics."""
+    r, rf = r.dropna(), rf.dropna()
+    aligned_dates = r.index.intersection(rf.index)
+    r, rf = r.loc[aligned_dates], rf.loc[aligned_dates]
+
+    if len(r) == 0:
+        return [np.nan] * 7
+
+    excess_r = r - rf
+    n_months = len(r)
+
+    ann_avg_ret = (1 + r).prod() ** (12 / n_months) - 1
+    ann_vol = r.std() * np.sqrt(12)
+    sharpe = excess_r.mean() / r.std() * np.sqrt(12) if r.std() != 0 else np.nan
+    rmin, rmax = r.min(), r.max()
+    cumulative_return = (1 + r).prod() - 1
+
+    cum_series = (1 + r).cumprod()
+    drawdown = (cum_series - cum_series.cummax()) / cum_series.cummax()
+    max_drawdown = drawdown.min()
+
+    return ann_avg_ret, ann_vol, cumulative_return, sharpe, rmin, rmax, max_drawdown
+
+# Compute metrics for all portfolios
+metrics = {method: compute_metrics(mvp_series_all[method], rf_aligned) for method in methods}
+metrics['VW'] = compute_metrics(vw_series, rf_aligned)
+
+# Print metrics in a formatted way
+print("\n=== Portfolio Performance Metrics ===")
+for name in metrics.keys():
+    ann_avg_ret, ann_vol, cum_ret, sharpe, rmin, rmax, max_dd = metrics[name]
+    print(f"\n{name} Portfolio:")
+    print(f"{'Annualized Average Return':<30}: {ann_avg_ret:>8.4f}")
+    print(f"{'Annualized Volatility':<30}: {ann_vol:>8.4f}")
+    print(f"{'Cumulative Total Return':<30}: {cum_ret:>8.4f}")
+    print(f"{'Sharpe Ratio':<30}: {sharpe:>8.4f}")
+    print(f"{'Minimum Monthly Return':<30}: {rmin:>8.4f}")
+    print(f"{'Maximum Monthly Return':<30}: {rmax:>8.4f}")
+    print(f"{'Maximum Drawdown':<30}: {max_dd:>8.4f}")
 
 # ------------------------------
 # STEP 9 – PLOT CUMULATIVE RETURNS
@@ -503,11 +490,7 @@ for method, series in mvp_series_all.items():
     if not series.dropna().empty:
         (1 + series).cumprod().plot(label=f"MVP ({method})")
 (1 + vw_series).cumprod().plot(label="VW Portfolio")
-
-# Dynamic title based on data range
-min_year = min([series.index.min().year for series in mvp_series_all.values() if not series.empty] + [vw_series.index.min().year])
-max_year = max([series.index.max().year for series in mvp_series_all.values() if not series.empty] + [vw_series.index.max().year])
-plt.title(f"Cumulative Returns ({min_year}–{max_year})")
+plt.title("Cumulative Returns (2013–2023)")
 plt.xlabel("Date")
 plt.ylabel("Portfolio Value")
 plt.grid(True)
@@ -516,24 +499,93 @@ plt.tight_layout()
 plt.show()
 
 # ------------------------------
+# STEP 10 – DISPLAY PORTFOLIO METRICS AS A TABLE
+# ------------------------------
+
+# Create a DataFrame for the metrics
+metric_names = [
+    "Annualized Average Return",
+    "Annualized Volatility",
+    "Cumulative Total Return",
+    "Sharpe Ratio",
+    "Minimum Monthly Return",
+    "Maximum Monthly Return",
+    "Maximum Drawdown"
+]
+metrics_df = pd.DataFrame.from_dict(metrics, orient='index', columns=metric_names)
+
+# Display the DataFrame as a formatted text table
+print("\n=== Portfolio Metrics Table (Text Format) ===")
+print(metrics_df.to_string(formatters={
+    "Annualized Average Return": "{:.4f}".format,
+    "Annualized Volatility": "{:.4f}".format,
+    "Cumulative Total Return": "{:.4f}".format,
+    "Sharpe Ratio": "{:.4f}".format,
+    "Minimum Monthly Return": "{:.4f}".format,
+    "Maximum Monthly Return": "{:.4f}".format,
+    "Maximum Drawdown": "{:.4f}".format
+}))
+
+# Plot the metrics as a table using matplotlib
+plt.figure(figsize=(12, 4))
+plt.axis('off')  # Hide axes
+table = plt.table(
+    cellText=metrics_df.round(4).values,
+    colLabels=metrics_df.columns,
+    rowLabels=metrics_df.index,
+    loc='center',
+    cellLoc='center',
+    colWidths=[0.15] * len(metrics_df.columns)
+)
+table.auto_set_font_size(False)
+table.set_fontsize(10)
+table.scale(1, 1.5)  # Adjust table size
+plt.title("Portfolio Performance Metrics Table", fontsize=12, pad=20)
+plt.show()
+
+# ------------------------------
 # STEP 11 – CARBON METRICS FOR P_mv_oos
 # ------------------------------
 
-# Adjust range to 2013–2023 (carbon data availability)
-for Y in range(2013, 2024):  # Changed from (2013, 2025) since carbon data ends in 2023
+# Create long-format emissions data
+scope1_long = scope1_us.melt(
+    id_vars=['Firm_Name'],
+    value_vars=[col for col in scope1_us.columns if str(col).isdigit()],
+    var_name='Year',
+    value_name='Scope1'
+)
+scope2_long = scope2_us.melt(
+    id_vars=['Firm_Name'],
+    value_vars=[col for col in scope2_us.columns if str(col).isdigit()],
+    var_name='Year',
+    value_name='Scope2'
+)
+
+# Merge Scope 1 and Scope 2 emissions
+emissions_long = pd.merge(scope1_long, scope2_long, on=['Firm_Name', 'Year'], how='inner')
+emissions_long['E'] = emissions_long['Scope1'] + emissions_long['Scope2']
+emissions_long['Year'] = emissions_long['Year'].astype(int)
+
+# Create annual revenues and market caps
+revenues_annual = revenues.groupby(revenues.index.year).last()
+mkt_caps_annual = mkt_caps.groupby(mkt_caps.index.year).last()
+
+# Compute WACI and Carbon Footprint for P_mv_oos using 'lw' method
+method = 'lw'
+carbon_footprints = {}
+waci_values = {}
+
+for Y in range(2013, 2023):
     weights_Y_minus_1 = mvp_weights_all[method].get(Y - 1, pd.Series())
     if weights_Y_minus_1.empty:
         print(f"No weights available for year {Y-1}")
         continue
     firms_Y = weights_Y_minus_1.index
+
     emissions_Y = emissions_long[emissions_long['Year'] == Y].set_index('Firm_Name')['E'].reindex(firms_Y).dropna()
     mkt_cap_Y = mkt_caps_annual.loc[Y].reindex(firms_Y).dropna() if Y in mkt_caps_annual.index else pd.Series()
     revenue_Y = revenues_annual.loc[Y].reindex(firms_Y).dropna() if Y in revenues_annual.index else pd.Series()
-    
-    if mkt_cap_Y.empty or revenue_Y.empty:
-        print(f"No market cap or revenue data for year {Y}")
-        continue
-    
+
     common_firms = weights_Y_minus_1.index.intersection(emissions_Y.index).intersection(mkt_cap_Y.index).intersection(revenue_Y.index)
     if common_firms.empty:
         print(f"No common firms for year {Y}")
@@ -544,23 +596,31 @@ for Y in range(2013, 2024):  # Changed from (2013, 2025) since carbon data ends 
     mkt_cap_Y = mkt_cap_Y.reindex(common_firms)
     revenue_Y = revenue_Y.reindex(common_firms)
 
+    # Carbon Footprint (tons CO2e per million USD invested)
     emissions_over_mkt_cap = emissions_Y / mkt_cap_Y
     cf_Y = (weights_Y_minus_1 * emissions_over_mkt_cap).sum()
     carbon_footprints[Y] = cf_Y
 
-    revenue_Y_millions = revenue_Y / 1_000
+    # WACI (tons CO2e per million USD of revenue)
+    revenue_Y_millions = revenue_Y / 1_000  # Convert thousands to millions
     ci_Y = emissions_Y / revenue_Y_millions
     waci_Y = (weights_Y_minus_1 * ci_Y).sum()
     waci_values[Y] = waci_Y
 
-# Plot CF and WACI with dynamic title
+# Display results
+print("\n=== Carbon Footprint for P_mv_oos (tons CO2e per million USD invested) ===")
+for year, cf in carbon_footprints.items():
+    print(f"Year {year}: {cf:.2f}")
+
+print("\n=== Weighted-Average Carbon Intensity for P_mv_oos (tons CO2e per million USD of revenue) ===")
+for year, waci in waci_values.items():
+    print(f"Year {year}: {waci:.2f}")
+
+# Plot CF and WACI
 plt.figure(figsize=(10, 6))
-years_cf = list(carbon_footprints.keys())
-plt.plot(years_cf, list(carbon_footprints.values()), marker='o', label='Carbon Footprint (tons CO2e per million USD invested)')
-plt.plot(years_cf, list(waci_values.values()), marker='s', label='WACI (tons CO2e per million USD of revenue)')
-min_year_cf = min(years_cf)
-max_year_cf = max(years_cf)
-plt.title(f"Carbon Footprint and WACI for P_mv_oos ({min_year_cf}–{max_year_cf})")
+plt.plot(list(carbon_footprints.keys()), list(carbon_footprints.values()), marker='o', label='Carbon Footprint')
+plt.plot(list(waci_values.keys()), list(waci_values.values()), marker='s', label='WACI')
+plt.title("Carbon Footprint and WACI for P_mv_oos (2013–2023)")
 plt.xlabel("Year")
 plt.ylabel("Metrics (tons CO2e per million USD)")
 plt.grid(True)
@@ -568,19 +628,13 @@ plt.legend()
 plt.tight_layout()
 plt.show()
 
-# [STEP 12 to STEP 15 - Adjust optimization ranges and plot titles similarly]
-
 # ------------------------------
-# STEP 12 – PORTFOLIO WITH 50% CARBON FOOTPRINT REDUCTION (2.2)
+# STEP 12 – PORTFOLIO WITH 50% CARBON FOOTPRINT REDUCTION
 # ------------------------------
 
-# Adjust start_year to 2012 to include weights for 2013 returns
-start_year = 2012
-end_year = 2023
-
-# Compute c_Y vectors for each year (E_{i,Y} / Cap_{i,Y})
+# Compute c_Y vectors (E_{i,Y} / Cap_{i,Y})
 c_vectors = {}
-for Y in range(2013, 2024):
+for Y in range(2013, 2023):
     emissions_Y = emissions_long[emissions_long['Year'] == Y].set_index('Firm_Name')['E']
     if Y not in mkt_caps_annual.index:
         continue
@@ -589,13 +643,56 @@ for Y in range(2013, 2024):
     c_Y = emissions_Y.reindex(common_firms) / mkt_cap_Y.reindex(common_firms)
     c_vectors[Y] = c_Y.dropna()
 
-# Assume carbon_footprints from original portfolio (STEP 10) is available
-carbon_footprints_original = carbon_footprints  # From STEP 10
+carbon_footprints_original = carbon_footprints  # From STEP 11
+
+# Define constrained MVP function
+def compute_mvp_weights_constrained(returns_window, mkt_caps_window, revenues_window, rf_window, method='lw',
+                                    max_weight=0.05, prev_weights=None, turnover_limit=None, transaction_cost=None,
+                                    carbon_constraint=None):
+    """Compute MVP weights with carbon footprint constraint."""
+    sufficient_data = returns_window.count() >= 120
+    returns_window = returns_window.loc[:, sufficient_data].dropna(axis=1, how="any")
+    mkt_caps_window = mkt_caps_window.loc[:, sufficient_data].reindex(returns_window.index, method='ffill')
+    revenues_window = revenues_window.loc[:, sufficient_data].reindex(returns_window.index, method='ffill')
+    rf_window = rf_window.reindex(returns_window.index, method='ffill').fillna(0)
+
+    if returns_window.shape[1] < 2:
+        return pd.Series(np.nan)
+
+    assets = returns_window.columns
+    n = len(assets)
+
+    lw = LedoitWolf()
+    lw.fit(returns_window)
+    cov_matrix = lw.covariance_
+
+    w = cp.Variable(n)
+    constraints = [cp.sum(w) == 1, w >= 0, w <= max_weight]
+    if turnover_limit and prev_weights is not None:
+        aligned_prev = prev_weights.reindex(assets).fillna(0).values
+        constraints.append(cp.norm1(w - aligned_prev) <= turnover_limit)
+    if carbon_constraint is not None:
+        c, threshold = carbon_constraint
+        c_aligned = c.reindex(assets).fillna(0).values
+        constraints.append(w @ c_aligned <= threshold)
+
+    objective = cp.Minimize(cp.quad_form(w, cp.psd_wrap(cov_matrix)))
+    prob = cp.Problem(objective, constraints)
+    try:
+        prob.solve()
+        if w.value is None:
+            print(f"Optimization failed for method {method}")
+            return pd.Series(np.nan, index=assets)
+    except Exception as e:
+        print(f"Optimization error: {e}")
+        return pd.Series(np.nan, index=assets)
+
+    return pd.Series(w.value, index=assets)
 
 # Rolling optimization for constrained portfolio
 mvp_weights_constrained = {}
 prev_weights = None
-method = 'lw'  # Ledoit-Wolf covariance estimation
+method = 'lw'
 for year in range(start_year, end_year + 1):
     window_start = pd.Timestamp(f"{year - 10}-01-01")
     window_end = pd.Timestamp(f"{year - 1}-12-31")
@@ -609,31 +706,25 @@ for year in range(start_year, end_year + 1):
     rf_window = rf_series[(rf_series.index >= window_start) &
                           (rf_series.index <= window_end)]
 
-    Y = year + 1
-    if Y in c_vectors and Y in carbon_footprints_original:
-        c_Y = c_vectors[Y]
-        threshold = 0.5 * carbon_footprints_original[Y]
-        carbon_constraint = (c_Y, threshold)
-    else:
-        carbon_constraint = None
+    Y = year
+    carbon_constraint = (c_vectors[Y], 0.5 * carbon_footprints_original[Y]) if Y in c_vectors and Y in carbon_footprints_original else None
+    if carbon_constraint is None:
         print(f"Warning: No carbon constraint data for year {Y}")
 
-    weights = compute_mvp_weights(returns_window, mkt_caps_window, revenues_window, rf_window,
-                                  method=method, max_weight=0.05,
-                                  prev_weights=prev_weights, turnover_limit=0.3,
-                                  carbon_constraint=carbon_constraint)
+    weights = compute_mvp_weights_constrained(returns_window, mkt_caps_window, revenues_window, rf_window,
+                                              method=method, max_weight=0.05,
+                                              prev_weights=prev_weights, turnover_limit=0.3,
+                                              carbon_constraint=carbon_constraint)
     mvp_weights_constrained[year] = weights.dropna()
     prev_weights = weights
 
-# Compute ex-post returns for constrained portfolio
+# Compute returns and metrics
 mvp_series_constrained = compute_portfolio_returns(simple_returns, mvp_weights_constrained, mode='mvp')
-
-# Compute performance metrics
 metrics['constrained'] = compute_metrics(mvp_series_constrained, rf_aligned)
 
-# Compute carbon footprints for constrained portfolio (verification)
+# Compute carbon footprints for constrained portfolio
 carbon_footprints_constrained = {}
-for Y in range(2013, 2024):
+for Y in range(2013, 2023):
     weights_Y_minus_1 = mvp_weights_constrained.get(Y - 1, pd.Series())
     if weights_Y_minus_1.empty:
         continue
@@ -647,7 +738,7 @@ for Y in range(2013, 2024):
     cf_Y = (weights_Y_minus_1 * c_Y).sum()
     carbon_footprints_constrained[Y] = cf_Y
 
-# Display carbon footprints comparison
+# Display comparison
 print("\n=== Carbon Footprint Comparison ===")
 print("Year | Original CF | Constrained CF | Ratio (Constrained/Original)")
 for Y in carbon_footprints_constrained.keys():
@@ -656,17 +747,17 @@ for Y in carbon_footprints_constrained.keys():
     ratio = cf_constr / cf_orig if cf_orig != 0 else np.nan
     print(f"{Y}   | {cf_orig:.2f}       | {cf_constr:.2f}         | {ratio:.2f}")
 
-# Update and display metrics table
+# Update metrics table
 metrics_df = pd.DataFrame.from_dict(metrics, orient='index', columns=metric_names)
 print("\n=== Updated Portfolio Metrics Table ===")
 print(metrics_df.to_string(formatters={k: "{:.4f}".format for k in metric_names}))
 
-# Plot cumulative returns
+# Plot results
 plt.figure(figsize=(12, 6))
 (1 + mvp_series_all['lw']).cumprod().plot(label="Original MVP (lw)")
 (1 + mvp_series_constrained).cumprod().plot(label="Constrained MVP (lw, 0.5 CF)")
 (1 + vw_series).cumprod().plot(label="VW Portfolio")
-plt.title("Cumulative Returns Comparison (2013–2024)")
+plt.title("Cumulative Returns Comparison (2013–2023)")
 plt.xlabel("Date")
 plt.ylabel("Portfolio Value")
 plt.grid(True)
@@ -674,7 +765,6 @@ plt.legend()
 plt.tight_layout()
 plt.show()
 
-# Plot carbon footprints
 plt.figure(figsize=(10, 6))
 plt.plot(list(carbon_footprints_original.keys()), list(carbon_footprints_original.values()), marker='o', label='Original MVP CF')
 plt.plot(list(carbon_footprints_constrained.keys()), list(carbon_footprints_constrained.values()), marker='s', label='Constrained MVP CF (0.5)')
@@ -687,24 +777,23 @@ plt.tight_layout()
 plt.show()
 
 # ------------------------------
-# STEP 13 – PORTFOLIO TRACKING WITH 50% CARBON FOOTPRINT REDUCTION (2.3)
+# STEP 13 – PORTFOLIO TRACKING WITH 50% CARBON FOOTPRINT REDUCTION
 # ------------------------------
 
-# Function to compute value-weighted benchmark weights
 def compute_vw_weights(mkt_caps_annual, year):
+    """Compute value-weighted weights based on market capitalization."""
     if year not in mkt_caps_annual.index:
         print(f"No market cap data for year {year}")
         return pd.Series()
     mkt_cap_Y = mkt_caps_annual.loc[year]
     total_cap = mkt_cap_Y.sum()
     if total_cap == 0:
-        print(f"Total market cap is zero for year {year}")
         return pd.Series()
     return mkt_cap_Y / total_cap
 
 # Compute benchmark carbon footprint
 benchmark_cf = {}
-for Y in range(2013, 2024):
+for Y in range(2013, 2023):
     emissions_Y = emissions_long[emissions_long['Year'] == Y].set_index('Firm_Name')['E']
     if Y not in mkt_caps_annual.index:
         continue
@@ -715,12 +804,42 @@ for Y in range(2013, 2024):
     cf_vw_Y = emissions_Y.sum() / total_cap_Y if total_cap_Y != 0 else np.nan
     benchmark_cf[Y] = cf_vw_Y
 
-# Rolling optimization for tracking portfolio
-start_year = 2012
-end_year = 2023
-tracking_weights = {}
-method = 'lw'
+def compute_tracking_weights(returns_window, mkt_caps_window, revenues_window, rf_window, vw_weights,
+                             c_vector, cf_threshold, method='lw', max_weight=0.05):
+    """Compute weights minimizing tracking error with carbon constraint."""
+    sufficient_data = returns_window.count() >= 120
+    returns_window = returns_window.loc[:, sufficient_data].dropna(axis=1, how="any")
+    if returns_window.shape[1] < 2:
+        return pd.Series(np.nan, index=vw_weights.index)
 
+    assets = returns_window.columns
+    n = len(assets)
+
+    lw = LedoitWolf()
+    lw.fit(returns_window)
+    cov_matrix = lw.covariance_
+
+    vw_weights_aligned = vw_weights.reindex(assets).fillna(0).values
+    c_aligned = c_vector.reindex(assets).fillna(0).values
+
+    w = cp.Variable(n)
+    diff = w - vw_weights_aligned
+    objective = cp.Minimize(cp.quad_form(diff, cp.psd_wrap(cov_matrix)))
+    constraints = [cp.sum(w) == 1, w >= 0, w <= max_weight, w @ c_aligned <= cf_threshold]
+
+    prob = cp.Problem(objective, constraints)
+    try:
+        prob.solve()
+        if w.value is None:
+            return pd.Series(np.nan, index=assets)
+    except Exception as e:
+        print(f"Optimization error: {e}")
+        return pd.Series(np.nan, index=assets)
+
+    return pd.Series(w.value, index=assets)
+
+# Rolling optimization for tracking portfolio
+tracking_weights = {}
 for year in range(start_year, end_year + 1):
     window_start = pd.Timestamp(f"{year - 10}-01-01")
     window_end = pd.Timestamp(f"{year - 1}-12-31")
@@ -733,33 +852,29 @@ for year in range(start_year, end_year + 1):
                               (revenues.index <= window_end)][eligible_assets]
     rf_window = rf_series[(rf_series.index >= window_start) &
                          (rf_series.index <= window_end)]
-    
+
     vw_weights_Y = compute_vw_weights(mkt_caps_annual, year)
     if vw_weights_Y.empty:
         continue
-    
     c_Y = c_vectors.get(year, pd.Series())
     if c_Y.empty:
         continue
-    
     cf_vw_Y = benchmark_cf.get(year, np.nan)
     if np.isnan(cf_vw_Y):
         continue
     cf_threshold = 0.5 * cf_vw_Y
-    
+
     weights = compute_tracking_weights(returns_window, mkt_caps_window, revenues_window, rf_window,
-                                      vw_weights_Y, c_Y, cf_threshold, method=method, max_weight=0.05)
+                                       vw_weights_Y, c_Y, cf_threshold, method='lw', max_weight=0.05)
     tracking_weights[year] = weights.dropna()
 
-# Compute ex-post portfolio returns
+# Compute returns and metrics
 tracking_series = compute_portfolio_returns(simple_returns, tracking_weights, mode='mvp')
-
-# Compute performance metrics
 metrics['tracking_0.5'] = compute_metrics(tracking_series, rf_aligned)
 
-# Compute carbon footprints for verification
+# Compute carbon footprints
 carbon_footprints_tracking = {}
-for Y in range(2013, 2024):
+for Y in range(2013, 2023):
     weights_Y_minus_1 = tracking_weights.get(Y - 1, pd.Series())
     if weights_Y_minus_1.empty:
         continue
@@ -773,7 +888,7 @@ for Y in range(2013, 2024):
     cf_Y = (weights_Y_minus_1 * c_Y).sum()
     carbon_footprints_tracking[Y] = cf_Y
 
-# Display carbon footprint comparison
+# Display comparison
 print("\n=== Carbon Footprint Comparison for Tracking Portfolio ===")
 print("Year | Benchmark CF | Tracking CF | Ratio (Tracking/Benchmark)")
 for Y in carbon_footprints_tracking.keys():
@@ -782,16 +897,16 @@ for Y in carbon_footprints_tracking.keys():
     ratio = cf_track / cf_vw if cf_vw != 0 else np.nan
     print(f"{Y}   | {cf_vw:.2f}       | {cf_track:.2f}         | {ratio:.2f}")
 
-# Update and display metrics table
+# Update metrics table
 metrics_df = pd.DataFrame.from_dict(metrics, orient='index', columns=metric_names)
 print("\n=== Updated Portfolio Metrics Table ===")
 print(metrics_df.to_string(formatters={k: "{:.4f}".format for k in metric_names}))
 
-# Plot cumulative returns
+# Plot results
 plt.figure(figsize=(12, 6))
 (1 + vw_series).cumprod().plot(label="VW Portfolio")
 (1 + tracking_series).cumprod().plot(label="Tracking Portfolio (0.5 CF)")
-plt.title("Cumulative Returns Comparison (2013–2024)")
+plt.title("Cumulative Returns Comparison (2013–2023)")
 plt.xlabel("Date")
 plt.ylabel("Portfolio Value")
 plt.grid(True)
@@ -799,7 +914,6 @@ plt.legend()
 plt.tight_layout()
 plt.show()
 
-# Plot carbon footprints
 plt.figure(figsize=(10, 6))
 plt.plot(list(benchmark_cf.keys()), list(benchmark_cf.values()), marker='o', label='Benchmark CF')
 plt.plot(list(carbon_footprints_tracking.keys()), list(carbon_footprints_tracking.values()), marker='s', label='Tracking Portfolio CF (0.5)')
@@ -812,16 +926,16 @@ plt.tight_layout()
 plt.show()
 
 # ------------------------------
-# STEP 14 – COMPARISON ANALYSIS 50% CARBON FOOTPRINT REDUCTION (2.4)
+# STEP 14 – COMPARISON ANALYSIS 50% CARBON FOOTPRINT REDUCTION
 # ------------------------------
 
-# Align risk-free rate with portfolio returns
+# Align risk-free rates
 rf_aligned_mv = rf_series.reindex(mvp_series_all['lw'].index, method="ffill")
 rf_aligned_mv_constr = rf_series.reindex(mvp_series_constrained.index, method="ffill")
 rf_aligned_vw = rf_series.reindex(vw_series.index, method="ffill")
 rf_aligned_track = rf_series.reindex(tracking_series.index, method="ffill")
 
-# Compute metrics for all portfolios
+# Compute metrics
 metric_names = ["Annualized Return", "Annualized Volatility", "Cumulative Return",
                 "Sharpe Ratio", "Min Monthly Return", "Max Monthly Return", "Max Drawdown"]
 metrics_mv = compute_metrics(mvp_series_all['lw'], rf_aligned_mv)
@@ -838,41 +952,30 @@ metrics_dict = {
 }
 metrics_df = pd.DataFrame.from_dict(metrics_dict, orient='index', columns=metric_names)
 
-# Display financial performance comparison
-print("\n=== Financial Performance Comparison (2013–2024) ===")
+# Display financial performance
+print("\n=== Financial Performance Comparison (2013–2023) ===")
 print(metrics_df.to_string(formatters={k: "{:.4f}".format for k in metric_names}))
 
-# Carbon footprint comparison DataFrames
-cf_mv_df = pd.DataFrame({
-    "P_oos^(mv)": carbon_footprints_original,
-    "P_oos^(mv)(0.5)": carbon_footprints_constrained
-}).dropna()
+# Carbon footprint comparison
+cf_mv_df = pd.DataFrame({"P_oos^(mv)": carbon_footprints_original, "P_oos^(mv)(0.5)": carbon_footprints_constrained}).dropna()
 cf_mv_df["Ratio"] = cf_mv_df["P_oos^(mv)(0.5)"] / cf_mv_df["P_oos^(mv)"]
 
-cf_vw_df = pd.DataFrame({
-    "P^(vw)": benchmark_cf,
-    "P_oos^(vw)(0.5)": carbon_footprints_tracking
-}).dropna()
+cf_vw_df = pd.DataFrame({"P^(vw)": benchmark_cf, "P_oos^(vw)(0.5)": carbon_footprints_tracking}).dropna()
 cf_vw_df["Ratio"] = cf_vw_df["P_oos^(vw)(0.5)"] / cf_vw_df["P^(vw)"]
 
-# Display carbon footprint comparisons
 print("\n=== Carbon Footprint Comparison: P_oos^(mv) vs P_oos^(mv)(0.5) ===")
-print(cf_mv_df.to_string(formatters={"P_oos^(mv)": "{:.2f}".format,
-                                     "P_oos^(mv)(0.5)": "{:.2f}".format,
-                                     "Ratio": "{:.2f}".format}))
+print(cf_mv_df.to_string(formatters={"P_oos^(mv)": "{:.2f}".format, "P_oos^(mv)(0.5)": "{:.2f}".format, "Ratio": "{:.2f}".format}))
 
 print("\n=== Carbon Footprint Comparison: P^(vw) vs P_oos^(vw)(0.5) ===")
-print(cf_vw_df.to_string(formatters={"P^(vw)": "{:.2f}".format,
-                                     "P_oos^(vw)(0.5)": "{:.2f}".format,
-                                     "Ratio": "{:.2f}".format}))
+print(cf_vw_df.to_string(formatters={"P^(vw)": "{:.2f}".format, "P_oos^(vw)(0.5)": "{:.2f}".format, "Ratio": "{:.2f}".format}))
 
-# Plot cumulative returns
+# Plot comparisons
 plt.figure(figsize=(12, 6))
 (1 + mvp_series_all['lw']).cumprod().plot(label="P_oos^(mv)")
 (1 + mvp_series_constrained).cumprod().plot(label="P_oos^(mv)(0.5)")
 (1 + vw_series).cumprod().plot(label="P^(vw)")
 (1 + tracking_series).cumprod().plot(label="P_oos^(vw)(0.5)")
-plt.title("Cumulative Returns Comparison (2013–2024)")
+plt.title("Cumulative Returns Comparison (2013–2023)")
 plt.xlabel("Date")
 plt.ylabel("Portfolio Value")
 plt.grid(True)
@@ -880,7 +983,6 @@ plt.legend()
 plt.tight_layout()
 plt.show()
 
-# Plot carbon footprints
 plt.figure(figsize=(12, 6))
 plt.plot(cf_mv_df.index, cf_mv_df["P_oos^(mv)"], marker='o', label="P_oos^(mv) CF")
 plt.plot(cf_mv_df.index, cf_mv_df["P_oos^(mv)(0.5)"], marker='s', label="P_oos^(mv)(0.5) CF")
@@ -895,77 +997,77 @@ plt.tight_layout()
 plt.show()
 
 # ------------------------------
-# STEP 15 – NET ZERO PORTFOLIO (3.1)
+# STEP 15 – NET ZERO PORTFOLIO
 # ------------------------------
 
-# Base year and reduction rate
 Y0 = 2013
 theta = 0.10  # 10% annual reduction
 
-# Compute base year carbon footprint for benchmark
+# Compute base year carbon footprint
 emissions_Y0 = emissions_long[emissions_long['Year'] == Y0].set_index('Firm_Name')['E']
 mkt_cap_Y0 = mkt_caps_annual.loc[Y0]
 common_firms_Y0 = emissions_Y0.index.intersection(mkt_cap_Y0.index)
 emissions_Y0 = emissions_Y0.reindex(common_firms_Y0)
 total_cap_Y0 = mkt_cap_Y0.reindex(common_firms_Y0).sum()
-CF_Y0_vw = emissions_Y0.sum() / total_cap_Y0
+CF_Y0_vw = emissions_Y0.sum() / total_cap_Y0 if total_cap_Y0 != 0 else np.nan
 print(f"Base Year (2013) Benchmark Carbon Footprint: {CF_Y0_vw:.2f} tons CO2e per million USD")
 
-# Function to compute annual Net Zero targets
 def compute_nz_target(Y, CF_Y0, theta):
+    """Compute annual Net Zero carbon footprint target."""
     return (1 - theta) ** (Y - Y0 + 1) * CF_Y0
 
 # Rolling optimization for Net Zero portfolio
 nz_weights = {}
-method = 'lw'
-start_year = 2012
-end_year = 2023
-
 for year in range(start_year, end_year + 1):
     window_start = pd.Timestamp(f"{year - 10}-01-01")
     window_end = pd.Timestamp(f"{year - 1}-12-31")
     eligible_assets = first_available[first_available <= window_start].index
     returns_window = simple_returns[(simple_returns.index >= window_start) &
                                    (simple_returns.index <= window_end)][eligible_assets]
-    if returns_window.empty or returns_window.shape[1] < 2:
+    if returns_window.shape[1] < 2:
         nz_weights[year] = pd.Series(np.nan, index=eligible_assets)
         continue
-    
+
     vw_weights_Y = compute_vw_weights(mkt_caps_annual, year)
     if vw_weights_Y.empty:
         nz_weights[year] = pd.Series(np.nan, index=eligible_assets)
+        continue
     c_Y = c_vectors.get(year, pd.Series())
     if c_Y.empty:
         nz_weights[year] = pd.Series(np.nan, index=eligible_assets)
         continue
-    
+
     cf_target_Y = compute_nz_target(year, CF_Y0_vw, theta)
-    
     assets = returns_window.columns
     vw_weights_aligned = vw_weights_Y.reindex(assets).fillna(0).values
     c_aligned = c_Y.reindex(assets).fillna(0).values
-    
+
     lw = LedoitWolf()
     lw.fit(returns_window)
     cov_matrix = lw.covariance_
-    
+
     w = cp.Variable(len(assets))
     diff = w - vw_weights_aligned
     objective = cp.Minimize(cp.quad_form(diff, cp.psd_wrap(cov_matrix)))
-    constraints = [cp.sum(w) == 1, w >= 0, w @ c_aligned <= cf_target_Y, w <= 0.05]
+    constraints = [cp.sum(w) == 1, w >= 0, w <= 0.05, w @ c_aligned <= cf_target_Y]
     prob = cp.Problem(objective, constraints)
-    prob.solve()
-    nz_weights[year] = pd.Series(w.value, index=assets) if w.value is not None else pd.Series(np.nan, index=assets)
+    try:
+        prob.solve()
+        nz_weights[year] = pd.Series(w.value, index=assets) if w.value is not None else pd.Series(np.nan, index=assets)
+        if w.value is not None:
+            print(f"Optimization successful for year {year}")
+    except Exception as e:
+        print(f"Optimization error for year {year}: {e}")
+        nz_weights[year] = pd.Series(np.nan, index=assets)
 
-# Compute ex-post returns
-nz_series = compute_portfolio_returns(simple_returns, nz_weights, mode='mvp')
+# Compute returns and metrics
+nz_series = compute_portfolio_returns(simple_returns, nz_weights, mode='mvp') if any(w.notna().any() for w in nz_weights.values()) else pd.Series()
+if not nz_series.empty:
+    metrics['nz'] = compute_metrics(nz_series, rf_series.reindex(nz_series.index, method='ffill'))
 
-# Compute performance metrics
-metrics['nz'] = compute_metrics(nz_series, rf_series.reindex(nz_series.index, method='ffill'))
-
-# Compute carbon footprints for verification
+# Compute carbon footprints
 carbon_footprints_nz = {}
-for Y in range(2013, 2024):
+for Y in range(2013, 2023):
     weights_Y_minus_1 = nz_weights.get(Y - 1, pd.Series())
     if weights_Y_minus_1.empty or weights_Y_minus_1.isna().all():
         continue
@@ -979,24 +1081,25 @@ for Y in range(2013, 2024):
     cf_Y = (weights_Y_minus_1 * c_Y).sum()
     carbon_footprints_nz[Y] = cf_Y
 
-# Display metrics and carbon footprints
-metrics_df = pd.DataFrame.from_dict(metrics, orient='index', columns=metric_names)
+# Display NZ portfolio metrics if available
 print("\n=== Net Zero Portfolio Metrics ===")
-print(metrics_df.loc['nz'].to_string(formatters={k: "{:.4f}".format for k in metric_names}))
-
+if 'nz' in metrics_df.index:
+    formatted_metrics = metrics_df.loc['nz'].apply(lambda x: f"{x:.4f}" if isinstance(x, (int, float)) else x)
+    print(formatted_metrics.to_string())
+else:
+    print("NZ portfolio metrics not available.")# Display carbon footprint verification
 print("\n=== Carbon Footprint for NZ Portfolio ===")
 print("Year | Target CF | Actual CF | Ratio (Actual/Target)")
 for Y in carbon_footprints_nz.keys():
     cf_target = compute_nz_target(Y, CF_Y0_vw, theta)
     cf_actual = carbon_footprints_nz[Y]
     ratio = cf_actual / cf_target if cf_target != 0 else np.nan
-    print(f"{Y}   | {cf_target:.2f}       | {cf_actual:.2f}         | {ratio:.2f}")
-
-# Plot cumulative returns
+    print(f"{Y}   | {cf_target:.2f}       | {cf_actual:.2f}         | {ratio:.2f}")# Plot cumulative returns
 plt.figure(figsize=(12, 6))
 (1 + vw_series).cumprod().plot(label="VW Portfolio")
-(1 + nz_series).cumprod().plot(label="NZ Portfolio")
-plt.title("Cumulative Returns: VW vs NZ Portfolio (2013–2024)")
+if not nz_series.empty:
+    (1 + nz_series).cumprod().plot(label="NZ Portfolio")
+plt.title("Cumulative Returns: VW vs NZ Portfolio (2013–2023)")
 plt.xlabel("Date")
 plt.ylabel("Portfolio Value")
 plt.grid(True)
@@ -1005,16 +1108,18 @@ plt.tight_layout()
 plt.show()
 
 # Plot carbon footprints with targets
-years = list(carbon_footprints_nz.keys())
-targets = [compute_nz_target(Y, CF_Y0_vw, theta) for Y in years]
-actual_cf = list(carbon_footprints_nz.values())
-plt.figure(figsize=(10, 6))
-plt.plot(years, targets, marker='o', label='NZ Target CF')
-plt.plot(years, actual_cf, marker='s', label='NZ Portfolio CF')
-plt.title("NZ Portfolio Carbon Footprint vs Targets (2013–2023)")
-plt.xlabel("Year")
-plt.ylabel("Carbon Footprint (tons CO2e per million USD)")
-plt.grid(True)
-plt.legend()
-plt.tight_layout()
-plt.show()
+if carbon_footprints_nz:
+    years = list(carbon_footprints_nz.keys())
+    targets = [compute_nz_target(Y, CF_Y0_vw, theta) for Y in years]
+    actual_cf = list(carbon_footprints_nz.values())
+    plt.figure(figsize=(10, 6))
+    plt.plot(years, targets, marker='o', label='NZ Target CF')
+    plt.plot(years, actual_cf, marker='s', label='NZ Portfolio CF')
+    plt.title("NZ Portfolio Carbon Footprint vs Targets (2013–2023)")
+    plt.xlabel("Year")
+    plt.ylabel("Carbon Footprint (tons CO2e per million USD)")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
