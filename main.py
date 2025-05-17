@@ -1230,12 +1230,12 @@ for year in range(start_year, end_year + 1):
     w = cp.Variable(len(assets))
     diff = w - vw_weights_aligned
     objective = cp.Minimize(cp.quad_form(diff, cp.psd_wrap(cov_matrix)))
-    constraints = [
-        cp.sum(w) == 1,          # Fully invested
-        w >= 0,                  # Long-only
-        w @ c_aligned <= cf_target_Y,  # Carbon footprint constraint
-        w <= 0.07                # Maximum weight per asset
-    ]
+constraints = [
+    cp.sum(w) == 1,               # Weights sum to 1
+    w >= 0,                       # Non-negative weights
+    w @ c_aligned <= cf_target_Y * 1.1,  # Relax target by 10%
+    w <= 0.10                     # Increase max weight per asset
+]
     prob = cp.Problem(objective, constraints)
     try:
         prob.solve()
