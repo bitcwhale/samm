@@ -147,76 +147,101 @@ first_available = simple_returns.notna().apply(lambda x: x[x].index.min())
 # STEP 4 – NEW FACTOR MODEL FUNCTIONS
 # ------------------------------
 
+import pandas as pd
+import numpy as np
+
 def construct_factors(returns, market_caps, revenues, risk_free_rate):
-    # Backward-fill revenue data (since it's annual) to align with monthly data
-    revenues = revenues.bfill(limit=11).ffill(limit=11)
+    """
+    Constructs factor returns (Mkt-RF, SMB, HML) from input data.
+    
+    Parameters:
+        returns (pd.DataFrame): Asset returns
+        market_caps (pd.DataFrame): Market capitalizations
+        revenues (pd.DataFrame): Revenue data
+        risk_free_rate (pd.Series): Risk-free rate
+        
+    Returns:
+        pd.DataFrame: Constructed factors
+    """
+    try:
+        # Backward-fill revenue data (since it's annual) to align with monthly data
+        revenues = revenues.bfill(limit=11).ffill(limit=11)
 
-    # === Market (Mkt-RF) Factor ===
-    market_weights = market_caps.div(market_caps.sum(axis=1), axis=0)
-    market_return = (returns * market_weights).sum(axis=1)
-    excess_market_return = market_return - risk_free_rate
+        # === Market (Mkt-RF) Factor ===
+        market_weights = market_caps.div(market_caps.sum(axis=1), axis=0)
+        market_return = (returns * market_weights).sum(axis=1)
+        excess_market_return = market_return - risk_free_rate
 
-    return excess_market_return  # Adjust as needed
+        # === Size (SMB) Factor ===
+        market_cap_median = market_caps.median(axis=1)
+        small = returns[market_caps.lt(market_cap_median, axis=0)]
+        big = returns[market_caps.ge(market_cap_median, axis=0)]
+        smb = small.mean(axis=1) - big.mean(axis=1)
 
-    # === Size (SMB) Factor ===
-    market_cap_median = market_caps.median(axis=1)
-    small = returns[market_caps.lt(market_cap_median, axis=0)]
-    big = returns[market_caps.ge(market_cap_median, axis=0)]
-    smb = small.mean(axis=1) - big.mean(axis=1)
+        # === Value (HML) Factor ===
+        # Avoid divide-by-zero issues in revenue-to-market
+        safe_mkt_caps = market_caps.copy()
+        safe_mkt_caps[safe_mkt_caps <= 0] = np.nan
+        revenue_to_market = revenues.div(safe_mkt_caps)
 
-    # === Value (HML) Factor ===
-    # Avoid divide-by-zero issues in revenue-to-market
-    safe_mkt_caps = market_caps.copy()
-    safe_mkt_caps[safe_mkt_caps <= 0] = np.nan
-    revenue_to_market = revenues.div(safe_mkt_caps)
+        rm_median = revenue_to_market.median(axis=1)
+        high_mask = revenue_to_market.gt(rm_median, axis=0)
+        low_mask = revenue_to_market.le(rm_median, axis=0)
 
-    rm_median = revenue_to_market.median(axis=1)
-    high_mask = revenue_to_market.gt(rm_median, axis=0)
-    low_mask = revenue_to_market.le(rm_median, axis=0)
+        # Require enough valid companies per group (e.g., ≥ 20)
+        high_valid = high_mask.sum(axis=1)
+        low_valid = low_mask.sum(axis=1)
+        valid_dates = (high_valid >= 20) & (low_valid >= 20)
 
-    # Require enough valid companies per group (e.g., ≥ 20)
-    high_valid = high_mask.sum(axis=1)
-    low_valid = low_mask.sum(axis=1)
-    valid_dates = (high_valid >= 20) & (low_valid >= 20)
+        if valid_dates.sum() == 0:
+            print("⚠️ No valid dates with enough high/low revenue-to-market splits for HML.")
+            hml = pd.Series(index=returns.index, data=np.nan)
+        else:
+            high_rm = returns.where(high_mask)
+            low_rm = returns.where(low_mask)
+            hml_raw = high_rm.mean(axis=1) - low_rm.mean(axis=1)
+            hml = hml_raw.where(valid_dates)
 
-    if valid_dates.sum() == 0:
-        print("⚠️ No valid dates with enough high/low revenue-to-market splits for HML.")
-        hml = pd.Series(index=returns.index, data=np.nan)
-    else:
-        high_rm = returns.where(high_mask)
-        low_rm = returns.where(low_mask)
-        hml_raw = high_rm.mean(axis=1) - low_rm.mean(axis=1)
-        hml = hml_raw.where(valid_dates)
+        # === Combine all factors ===
+        factors = pd.DataFrame({
+            'Mkt-RF': excess_market_return,
+            'SMB': smb,
+            'HML': hml
+        }, index=returns.index)
 
-    # === Combine all factors ===
-    factors = pd.DataFrame({
-        'Mkt-RF': excess_market_return,
-        'SMB': smb,
-        'HML': hml
-    }, index=returns.index)
+        # Fill gaps to avoid dropped rows later
+        factors = factors.ffill().bfill()
 
-    # Fill gaps to avoid dropped rows later
-    factors = factors.ffill().bfill()
+        # === Diagnostics ===
+        print("Factor Construction Diagnostics:")
+        print("Revenue-to-Market: % NaN =", revenue_to_market.isna().mean().mean())
+        print("SMB - % NaN:", smb.isna().mean(), " | Std Dev:", smb.std())
+        print("HML - % NaN:", hml.isna().mean(), " | Std Dev:", hml.std())
+        print("Excess Mkt-RF - % NaN:", excess_market_return.isna().mean())
+        print("Factors constructed. Date range:", factors.index.min(), "to", factors.index.max())
 
-    # === Diagnostics ===
-    print("Factor Construction Diagnostics:")
-    print("Revenue-to-Market: % NaN =", revenue_to_market.isna().mean().mean())
-    print("SMB - % NaN:", smb.isna().mean(), " | Std Dev:", smb.std())
-    print("HML - % NaN:", hml.isna().mean(), " | Std Dev:", hml.std())
-    print("Excess Mkt-RF - % NaN:", excess_market_return.isna().mean())
-    print("Factors constructed. Date range:", factors.index.min(), "to", factors.index.max())
+        return factors
 
-    return factors
-
-except Exception as e:
-    print("Error in construct_factors:", e)
-    print("returns shape:", returns.shape)
-    print("market_caps shape:", market_caps.shape)
-    print("revenues shape:", revenues.shape)
-    print("risk_free_rate shape:", risk_free_rate.shape)
-    return pd.DataFrame()
+    except Exception as e:
+        print("Error in construct_factors:", e)
+        print("returns shape:", returns.shape)
+        print("market_caps shape:", market_caps.shape)
+        print("revenues shape:", revenues.shape)
+        print("risk_free_rate shape:", risk_free_rate.shape)
+        return pd.DataFrame()
 
 def estimate_factor_loadings(returns, factors):
+    """
+    Estimates factor loadings (betas) and residuals for each company.
+    
+    Parameters:
+        returns (pd.DataFrame): Asset returns
+        factors (pd.DataFrame): Factor returns
+        
+    Returns:
+        dict: Betas for each company
+        dict: Residuals for each company
+    """
     betas = {}
     residuals = {}
     for company in returns.columns:
@@ -225,46 +250,58 @@ def estimate_factor_loadings(returns, factors):
         common_index = X.dropna().index.intersection(y.index)
         X = X.loc[common_index]
         y = y.loc[common_index]
-        y = y.loc[X.index]
         if len(y) < 60:
             betas[company] = np.full(len(factors.columns), np.nan)
             residuals[company] = np.nan
             continue
         X = np.column_stack([np.ones(len(X)), X])
         beta = np.linalg.lstsq(X, y, rcond=None)[0]
-        betas[company] = beta[1:]
+        betas[company] = beta[1:]  # Exclude intercept
         residuals[company] = y - X @ beta
-    return betas, residualsdef compute_factor_cov_matrix(returns, factors):
+    return betas, residuals
+
+def compute_factor_cov_matrix(returns, factors):
+    """
+    Computes the factor-based covariance matrix.
+    
+    Parameters:
+        returns (pd.DataFrame): Asset returns
+        factors (pd.DataFrame): Factor returns
+        
+    Returns:
+        np.ndarray: Covariance matrix
+        list: List of valid companies
+    """
     betas, residuals = estimate_factor_loadings(returns, factors)
     companies = [c for c in betas if not np.isnan(betas[c]).any()]
 
-if not companies:
-    print("⚠️ No valid companies after filtering for betas.")
-    return np.array([]), []
+    if not companies:
+        print("⚠️ No valid companies after filtering for betas.")
+        return np.array([]), []
 
-B = np.array([betas[c] for c in companies])
-print("B shape:", B.shape)
-print("Factors shape:", factors.shape)
+    B = np.array([betas[c] for c in companies])
+    print("B shape:", B.shape)
+    print("Factors shape:", factors.shape)
 
-factor_sub = factors.loc[returns.index].dropna()
-if len(factor_sub) < 2:
-    print("❌ Not enough data to compute factor covariance matrix.")
-    return np.array([]), []
+    factor_sub = factors.loc[returns.index].dropna()
+    if len(factor_sub) < 2:
+        print("❌ Not enough data to compute factor covariance matrix.")
+        return np.array([]), []
 
-F = np.cov(factor_sub.T, ddof=1)
+    F = np.cov(factor_sub.T, ddof=1)
 
-# Fix for single-factor model: ensure F is 2D
-if F.ndim == 0:
-    F = np.array([[F]])
-elif F.ndim == 1:
-    F = F.reshape((1, 1))
+    # Fix for single-factor model: ensure F is 2D
+    if F.ndim == 0:
+        F = np.array([[F]])
+    elif F.ndim == 1:
+        F = F.reshape((1, 1))
 
-print("Corrected F shape:", F.shape)
+    print("Corrected F shape:", F.shape)
 
-D = np.diag([np.var(residuals[c], ddof=1) for c in companies])
+    D = np.diag([np.var(residuals[c], ddof=1) for c in companies])
 
-cov_matrix = B @ F @ B.T + D
-return cov_matrix, companies
+    cov_matrix = B @ F @ B.T + D
+    return cov_matrix, companies
 
 # ------------------------------
 # STEP 5 – MVP WEIGHT FUNCTION
