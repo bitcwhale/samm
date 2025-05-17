@@ -7,6 +7,7 @@ import os
 from sklearn.covariance import LedoitWolf
 import cvxpy as cp
 from sklearn.decomposition import PCA# Define base URL for GitHub raw data files
+
 base_url = "https://raw.githubusercontent.com/bitcwhale/samm/main/"
 
 # ------------------------------
@@ -44,9 +45,11 @@ def check_scope(row):
     max_consecutive = values.groupby((values != values.shift()).cumsum()).transform('size') * values
     consecutive_years = max_consecutive.max()
     return (valid_years >= 7) and (consecutive_years >= 5)# Filter firm names that meet both Scope 1 and Scope 2 criteria
+    
 scope1_ok = set(scope1_us[scope1_us.apply(check_scope, axis=1)]["Firm_Name"])
 scope2_ok = set(scope2_us[scope2_us.apply(check_scope, axis=1)]["Firm_Name"])
 solid_names = scope1_ok & scope2_ok  
+
 # Intersection of firm names meeting ESG criteria
 # ------------------------------
 # STEP 2 – LOAD FINANCIAL DATA
@@ -103,8 +106,10 @@ revenues = revenues[list(common_names)]
 
 # Clean: interpolate linearly, internally only
 prices = prices.replace(0, np.nan).apply(pd.to_numeric, errors="coerce")
-prices = prices.interpolate(method="linear", axis=0, limit_area="inside")mkt_caps = mkt_caps.replace(0, np.nan).apply(pd.to_numeric, errors="coerce")
-mkt_caps = mkt_caps.interpolate(method="linear", axis=0, limit_area="inside")revenues = revenues.replace(0, np.nan).apply(pd.to_numeric, errors="coerce")
+prices = prices.interpolate(method="linear", axis=0, limit_area="inside")
+mkt_caps = mkt_caps.replace(0, np.nan).apply(pd.to_numeric, errors="coerce")
+mkt_caps = mkt_caps.interpolate(method="linear", axis=0, limit_area="inside")
+revenues = revenues.replace(0, np.nan).apply(pd.to_numeric, errors="coerce")
 revenues = revenues.interpolate(method="linear", axis=0, limit_area="inside")
 
 # Diagnostics after ESG filtering
