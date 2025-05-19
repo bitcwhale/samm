@@ -229,11 +229,11 @@ def estimate_factor_loadings(returns, factors):
         X = X.loc[common_index]
         y = y.loc[common_index]
         y = y.loc[X.index]
-        if len(y) < 60:
+        if len(y) < 120:
             betas[company] = np.full(len(factors.columns), np.nan)
             residuals[company] = np.nan
             continue
-        X = np.column_stack([np.ones(len(X)), X])
+        X = np.column_stack([np.ones(len(X)), X])  # Add intercept
         beta = np.linalg.lstsq(X, y, rcond=None)[0]
         betas[company] = beta[1:]
         residuals[company] = y - X @ beta
@@ -278,7 +278,7 @@ def compute_factor_cov_matrix(returns, factors):
 def compute_mvp_weights(returns_window, mkt_caps_window, revenues_window, rf_window, method='lw',
                         max_weight=0.05, prev_weights=None, turnover_limit=None, transaction_cost=None):
     """Compute Minimum Variance Portfolio weights using specified method (unconstrained)."""
-    sufficient_data = returns_window.count() >= 60
+    sufficient_data = returns_window.count() >= 120
     returns_window = returns_window.loc[:, sufficient_data].dropna(axis=1, how="any")
     mkt_caps_window = mkt_caps_window.loc[:, sufficient_data].reindex(returns_window.index, method='ffill')
     revenues_window = revenues_window.loc[:, sufficient_data].reindex(returns_window.index, method='ffill')
@@ -357,7 +357,7 @@ for method in methods:
     mvp_weights = {}
     prev_weights = None
     for year in range(start_year, end_year + 1):
-        window_start = pd.Timestamp(f"{year - 5}-01-01")
+        window_start = pd.Timestamp(f"{year - 10}-01-01")
         window_end = pd.Timestamp(f"{year - 1}-12-31")
 
         eligible_assets = first_available[first_available <= window_start].index
@@ -435,7 +435,7 @@ mvp_series_all = {method: compute_portfolio_returns(simple_returns, mvp_weights_
 vw_series = compute_portfolio_returns(simple_returns, mkt_caps_df=mkt_caps, mode='vw')
 
 # ------------------------------
-# STEP 10 – PERFORMANCE METRICS
+# STEP 8 – PERFORMANCE METRICS
 # ------------------------------
 
 rf_aligned = rf_series.reindex(vw_series.index, method="ffill")
@@ -544,6 +544,96 @@ plt.title("Portfolio Performance Metrics Table", fontsize=12, pad=20)
 plt.show()
 
 # ------------------------------
+# STEP 11 – EFFICIENT FRONTIER PLOT
+# ------------------------------
+
+def plot_efficient_frontier(returns_df):
+    """
+    Plots the efficient frontier for all possible portfolios given asset returns.
+    
+    Parameters:
+    - returns_df: pandas DataFrame with asset returns (columns = assets, rows = time periods)
+    """
+    # Calculate mean returns and covariance matrix
+    mean_returns = returns_df.mean()
+    cov_matrix = returns_df.cov()
+    n_assets = len(mean_returns)
+
+    # Define portfolio return and volatility functions
+    def portfolio_return(weights):
+        return np.dot(weights, mean_returns)
+
+    def portfolio_volatility(weights):
+        return np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
+
+    # Function to minimize volatility for a target return
+    def minimize_volatility(target_return):
+        constraints = (
+            {'type': 'eq', 'fun': lambda w: np.sum(w) - 1},  # Weights sum to 1
+            {'type': 'eq', 'fun': lambda w: portfolio_return(w) - target_return}  # Target return
+        )
+        bounds = [(0, 1) for _ in range(n_assets)]  # No short selling
+        initial_guess = np.array([1.0 / n_assets] * n_assets)
+        result = minimize(portfolio_volatility, initial_guess, method='SLSQP', 
+                         bounds=bounds, constraints=constraints)
+        return result
+
+    # Compute minimum variance portfolio
+    def min_var_portfolio():
+        constraints = {'type': 'eq', 'fun': lambda w: np.sum(w) - 1}
+        bounds = [(0, 1) for _ in range(n_assets)]
+        initial_guess = np.array([1.0 / n_assets] * n_assets)
+        result = minimize(portfolio_volatility, initial_guess, method='SLSQP', 
+                         bounds=bounds, constraints=constraints)
+        return result.x
+
+    min_var_weights = min_var_portfolio()
+    min_var_vol = portfolio_volatility(min_var_weights)
+    min_var_ret = portfolio_return(min_var_weights)
+
+    # Compute maximum return portfolio (highest returning asset, no short selling)
+    max_ret_asset = np.argmax(mean_returns)
+    max_ret_vol = np.sqrt(cov_matrix.iloc[max_ret_asset, max_ret_asset])
+    max_ret_ret = mean_returns[max_ret_asset]
+
+    # Generate target returns between min variance and max return
+    target_returns = np.linspace(min_var_ret, max_ret_ret, 50)
+
+    # Calculate efficient frontier points
+    successful_targets = []
+    frontier_volatilities = []
+    for target in target_returns:
+        result = minimize_volatility(target)
+        if result.success:
+            vol = portfolio_volatility(result.x)
+            successful_targets.append(target)
+            frontier_volatilities.append(vol)
+
+    # Compute equal-weight portfolio
+    equal_weights = np.array([1.0 / n_assets] * n_assets)
+    equal_vol = portfolio_volatility(equal_weights)
+    equal_ret = portfolio_return(equal_weights)
+
+    # Plotting
+    plt.figure(figsize=(10, 6))
+    plt.plot(frontier_volatilities, successful_targets, label='Efficient Frontier', marker='o')
+    plt.scatter(np.sqrt(np.diag(cov_matrix)), mean_returns, label='Individual Assets', alpha=0.5)
+    plt.scatter(min_var_vol, min_var_ret, color='red', label='Min Variance Portfolio', s=100)
+    plt.scatter(equal_vol, equal_ret, color='green', label='Equal Weight Portfolio', s=100)
+    plt.scatter(max_ret_vol, max_ret_ret, color='blue', label='Max Return Portfolio', s=100)
+    
+    plt.xlabel('Volatility (Standard Deviation)')
+    plt.ylabel('Expected Return')
+    plt.title('Efficient Frontier')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+# Call the function to plot the efficient frontier using the entire simple_returns DataFrame
+plot_efficient_frontier(simple_returns)
+
+
+# ------------------------------
 # STEP 11 – CARBON METRICS FOR P_mv_oos
 # ------------------------------
 
@@ -650,7 +740,7 @@ def compute_mvp_weights_constrained(returns_window, mkt_caps_window, revenues_wi
                                     max_weight=0.05, prev_weights=None, turnover_limit=None, transaction_cost=None,
                                     carbon_constraint=None):
     """Compute MVP weights with carbon footprint constraint."""
-    sufficient_data = returns_window.count() >= 60
+    sufficient_data = returns_window.count() >= 120
     returns_window = returns_window.loc[:, sufficient_data].dropna(axis=1, how="any")
     mkt_caps_window = mkt_caps_window.loc[:, sufficient_data].reindex(returns_window.index, method='ffill')
     revenues_window = revenues_window.loc[:, sufficient_data].reindex(returns_window.index, method='ffill')
@@ -694,7 +784,7 @@ mvp_weights_constrained = {}
 prev_weights = None
 method = 'lw'
 for year in range(start_year, end_year + 1):
-    window_start = pd.Timestamp(f"{year - 5}-01-01")
+    window_start = pd.Timestamp(f"{year - 10}-01-01")
     window_end = pd.Timestamp(f"{year - 1}-12-31")
     eligible_assets = first_available[first_available <= window_start].index
     returns_window = simple_returns[(simple_returns.index >= window_start) &
@@ -807,7 +897,7 @@ for Y in range(2013, 2023):
 def compute_tracking_weights(returns_window, mkt_caps_window, revenues_window, rf_window, vw_weights,
                              c_vector, cf_threshold, method='lw', max_weight=0.05):
     """Compute weights minimizing tracking error with carbon constraint."""
-    sufficient_data = returns_window.count() >= 60
+    sufficient_data = returns_window.count() >= 120
     returns_window = returns_window.loc[:, sufficient_data].dropna(axis=1, how="any")
     if returns_window.shape[1] < 2:
         return pd.Series(np.nan, index=vw_weights.index)
@@ -841,7 +931,7 @@ def compute_tracking_weights(returns_window, mkt_caps_window, revenues_window, r
 # Rolling optimization for tracking portfolio
 tracking_weights = {}
 for year in range(start_year, end_year + 1):
-    window_start = pd.Timestamp(f"{year - 5}-01-01")
+    window_start = pd.Timestamp(f"{year - 10}-01-01")
     window_end = pd.Timestamp(f"{year - 1}-12-31")
     eligible_assets = first_available[first_available <= window_start].index
     returns_window = simple_returns[(simple_returns.index >= window_start) &
@@ -1019,7 +1109,7 @@ def compute_nz_target(Y, CF_Y0, theta):
 # Rolling optimization for Net Zero portfolio
 nz_weights = {}
 for year in range(start_year, end_year + 1):
-    window_start = pd.Timestamp(f"{year - 5}-01-01")
+    window_start = pd.Timestamp(f"{year - 10}-01-01")
     window_end = pd.Timestamp(f"{year - 1}-12-31")
     eligible_assets = first_available[first_available <= window_start].index
     returns_window = simple_returns[(simple_returns.index >= window_start) &
@@ -1223,4 +1313,7 @@ plt.legend(["VW Portfolio", "Tracking Portfolio (50%)", "Net Zero Portfolio"])
 plt.grid(True)
 plt.tight_layout()
 plt.show()
+
+
+
 
