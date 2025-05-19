@@ -1327,3 +1327,106 @@ if carbon_footprints_nz:
     plt.legend()
     plt.tight_layout()
     plt.show()
+
+# ------------------------------
+# STEP 16 – COMPARE CUMULATIVE PERFORMANCE (Section 3.2)
+# ------------------------------
+
+# Plot cumulative returns for the three portfolios
+plt.figure(figsize=(12, 6))
+(1 + vw_series).cumprod().plot(label="VW Portfolio (Benchmark)")
+(1 + tracking_series).cumprod().plot(label="Tracking Portfolio (50% CF Reduction)")
+if not nz_series.empty:
+    (1 + nz_series).cumprod().plot(label="Net Zero Portfolio")
+else:
+    print("Warning: NZ series is empty; excluding from plot.")
+plt.title("Cumulative Returns Comparison (2014–2024)")
+plt.xlabel("Date")
+plt.ylabel("Portfolio Value")
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+# Compute and display summary statistics
+print("\n=== Summary Statistics for Portfolios ===")
+portfolios = {
+    "VW Portfolio (Benchmark)": vw_series,
+    "Tracking Portfolio (50% CF Reduction)": tracking_series,
+    "Net Zero Portfolio": nz_series
+}
+
+metric_names = [
+    "Annualized Average Return",
+    "Annualized Volatility",
+    "Cumulative Total Return",
+    "Sharpe Ratio",
+    "Minimum Monthly Return",
+    "Maximum Monthly Return",
+    "Maximum Drawdown"
+]
+
+metrics_dict = {}
+for name, series in portfolios.items():
+    if series.empty or series.dropna().empty:
+        print(f"{name}: No data available")
+        metrics_dict[name] = [np.nan] * 7
+        continue
+    metrics = compute_metrics(series, rf_series.reindex(series.index, method='ffill'))
+    metrics_dict[name] = metrics
+    ann_avg_ret, ann_vol, cum_ret, sharpe, rmin, rmax, max_dd = metrics
+    print(f"\n{name}:")
+    print(f"{'Annualized Average Return':<30}: {ann_avg_ret:>8.4f}")
+    print(f"{'Annualized Volatility':<30}: {ann_vol:>8.4f}")
+    print(f"{'Cumulative Total Return':<30}: {cum_ret:>8.4f}")
+    print(f"{'Sharpe Ratio':<30}: {sharpe:>8.4f}")
+    print(f"{'Minimum Monthly Return':<30}: {rmin:>8.4f}")
+    print(f"{'Maximum Monthly Return':<30}: {rmax:>8.4f}")
+    print(f"{'Maximum Drawdown':<30}: {max_dd:>8.4f}")
+
+# Create a metrics DataFrame for a tabular display
+metrics_df = pd.DataFrame.from_dict(metrics_dict, orient='index', columns=metric_names)
+print("\n=== Portfolio Metrics Table ===")
+print(metrics_df.to_string(formatters={k: "{:.4f}".format for k in metric_names}))
+
+# ------------------------------
+# STEP 17 – ANALYZE THE COST OF NET ZERO STRATEGY (Section 3.2)
+# ------------------------------
+
+# Compare carbon footprints
+print("\n=== Carbon Footprint Comparison ===")
+print("Year | VW CF | Tracking CF (50%) | NZ CF")
+cf_comparison = {}
+for Y in range(2014, 2024):
+    cf_vw = benchmark_cf.get(Y, np.nan)
+    cf_track = carbon_footprints_tracking.get(Y, np.nan)
+    cf_nz = carbon_footprints_nz.get(Y, np.nan)
+    print(f"{Y}   | {cf_vw:>5.2f} | {cf_track:>5.2f}         | {cf_nz:>5.2f}")
+    cf_comparison[Y] = {"VW CF": cf_vw, "Tracking CF (50%)": cf_track, "NZ CF": cf_nz}
+
+# Plot carbon footprints over time
+plt.figure(figsize=(10, 6))
+years = list(range(2014, 2024))
+plt.plot(years, [benchmark_cf.get(Y, np.nan) for Y in years], marker='o', label='VW Portfolio CF')
+plt.plot(years, [carbon_footprints_tracking.get(Y, np.nan) for Y in years], marker='s', label='Tracking Portfolio CF (50%)')
+plt.plot(years, [carbon_footprints_nz.get(Y, np.nan) for Y in years], marker='^', label='Net Zero Portfolio CF')
+plt.title("Carbon Footprint Comparison Over Time (2014–2024)")
+plt.xlabel("Year")
+plt.ylabel("Carbon Footprint (tons CO2e per million USD)")
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+# Optional: Plot as a bar chart for clearer yearly comparison
+cf_df = pd.DataFrame(cf_comparison).T
+cf_df.plot(kind='bar', figsize=(12, 6))
+plt.title("Carbon Footprint Comparison by Year (2014–2024)")
+plt.xlabel("Year")
+plt.ylabel("Carbon Footprint (tons CO2e per million USD)")
+plt.legend(["VW Portfolio", "Tracking Portfolio (50%)", "Net Zero Portfolio"])
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+
