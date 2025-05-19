@@ -229,7 +229,7 @@ def estimate_factor_loadings(returns, factors):
         X = X.loc[common_index]
         y = y.loc[common_index]
         y = y.loc[X.index]
-        if len(y) < 60:
+        if len(y) < 120:
             betas[company] = np.full(len(factors.columns), np.nan)
             residuals[company] = np.nan
             continue
@@ -278,7 +278,7 @@ def compute_factor_cov_matrix(returns, factors):
 def compute_mvp_weights(returns_window, mkt_caps_window, revenues_window, rf_window, method='lw',
                         max_weight=0.05, prev_weights=None, turnover_limit=None, transaction_cost=None):
     """Compute Minimum Variance Portfolio weights using specified method (unconstrained)."""
-    sufficient_data = returns_window.count() >= 60
+    sufficient_data = returns_window.count() >= 120
     returns_window = returns_window.loc[:, sufficient_data].dropna(axis=1, how="any")
     mkt_caps_window = mkt_caps_window.loc[:, sufficient_data].reindex(returns_window.index, method='ffill')
     revenues_window = revenues_window.loc[:, sufficient_data].reindex(returns_window.index, method='ffill')
@@ -357,7 +357,7 @@ for method in methods:
     mvp_weights = {}
     prev_weights = None
     for year in range(start_year, end_year + 1):
-        window_start = pd.Timestamp(f"{year - 5}-01-01")
+        window_start = pd.Timestamp(f"{year - 10}-01-01")
         window_end = pd.Timestamp(f"{year - 1}-12-31")
 
         eligible_assets = first_available[first_available <= window_start].index
@@ -650,7 +650,7 @@ def compute_mvp_weights_constrained(returns_window, mkt_caps_window, revenues_wi
                                     max_weight=0.05, prev_weights=None, turnover_limit=None, transaction_cost=None,
                                     carbon_constraint=None):
     """Compute MVP weights with carbon footprint constraint."""
-    sufficient_data = returns_window.count() >= 60
+    sufficient_data = returns_window.count() >= 120
     returns_window = returns_window.loc[:, sufficient_data].dropna(axis=1, how="any")
     mkt_caps_window = mkt_caps_window.loc[:, sufficient_data].reindex(returns_window.index, method='ffill')
     revenues_window = revenues_window.loc[:, sufficient_data].reindex(returns_window.index, method='ffill')
@@ -694,7 +694,7 @@ mvp_weights_constrained = {}
 prev_weights = None
 method = 'lw'
 for year in range(start_year, end_year + 1):
-    window_start = pd.Timestamp(f"{year - 5}-01-01")
+    window_start = pd.Timestamp(f"{year - 10}-01-01")
     window_end = pd.Timestamp(f"{year - 1}-12-31")
     eligible_assets = first_available[first_available <= window_start].index
     returns_window = simple_returns[(simple_returns.index >= window_start) &
@@ -807,7 +807,7 @@ for Y in range(2013, 2023):
 def compute_tracking_weights(returns_window, mkt_caps_window, revenues_window, rf_window, vw_weights,
                              c_vector, cf_threshold, method='lw', max_weight=0.05):
     """Compute weights minimizing tracking error with carbon constraint."""
-    sufficient_data = returns_window.count() >= 60
+    sufficient_data = returns_window.count() >= 120
     returns_window = returns_window.loc[:, sufficient_data].dropna(axis=1, how="any")
     if returns_window.shape[1] < 2:
         return pd.Series(np.nan, index=vw_weights.index)
@@ -841,7 +841,7 @@ def compute_tracking_weights(returns_window, mkt_caps_window, revenues_window, r
 # Rolling optimization for tracking portfolio
 tracking_weights = {}
 for year in range(start_year, end_year + 1):
-    window_start = pd.Timestamp(f"{year - 5}-01-01")
+    window_start = pd.Timestamp(f"{year - 10}-01-01")
     window_end = pd.Timestamp(f"{year - 1}-12-31")
     eligible_assets = first_available[first_available <= window_start].index
     returns_window = simple_returns[(simple_returns.index >= window_start) &
@@ -1019,7 +1019,7 @@ def compute_nz_target(Y, CF_Y0, theta):
 # Rolling optimization for Net Zero portfolio
 nz_weights = {}
 for year in range(start_year, end_year + 1):
-    window_start = pd.Timestamp(f"{year - 5}-01-01")
+    window_start = pd.Timestamp(f"{year - 10}-01-01")
     window_end = pd.Timestamp(f"{year - 1}-12-31")
     eligible_assets = first_available[first_available <= window_start].index
     returns_window = simple_returns[(simple_returns.index >= window_start) &
