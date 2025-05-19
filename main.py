@@ -544,22 +544,23 @@ plt.title("Portfolio Performance Metrics Table", fontsize=12, pad=20)
 plt.show()
 
 # ------------------------------
-# STEP 11 – EFFICIENT FRONTIER PLOT
+# STEP 11 – EFFICIENT FRONTIER PLOT USING PRE-CALCULATED PORTFOLIOS
 # ------------------------------
 
-def plot_efficient_frontier(returns_df):
+def plot_efficient_frontier_with_precalculated_portfolios(simple_returns, mvp_weights_all):
     """
-    Plots the efficient frontier for all possible portfolios given asset returns.
-    
+    Plots the risk-return points of pre-calculated MVPs with a smooth efficient frontier.
+
     Parameters:
-    - returns_df: pandas DataFrame with asset returns (columns = assets, rows = time periods)
+    - simple_returns: pandas DataFrame with asset returns (columns = assets, rows = time periods)
+    - mvp_weights_all: dictionary of pre-calculated MVP weights (method -> year -> weights)
     """
-    # Calculate mean returns and covariance matrix
-    mean_returns = returns_df.mean()
-    cov_matrix = returns_df.cov()
+    # Calculate mean returns and covariance matrix from the entire dataset
+    mean_returns = simple_returns.mean()
+    cov_matrix = simple_returns.cov()
     n_assets = len(mean_returns)
 
-    # Define portfolio return and volatility functions
+    # Helper functions to compute portfolio return and volatility
     def portfolio_return(weights):
         return np.dot(weights, mean_returns)
 
@@ -569,69 +570,105 @@ def plot_efficient_frontier(returns_df):
     # Function to minimize volatility for a target return
     def minimize_volatility(target_return):
         constraints = (
-            {'type': 'eq', 'fun': lambda w: np.sum(w) - 1},  # Weights sum to 1
-            {'type': 'eq', 'fun': lambda w: portfolio_return(w) - target_return}  # Target return
+            {'type': 'eq', 'fun': lambda w: np.sum(w) - 1},
+            {'type': 'eq', 'fun': lambda w: portfolio_return(w) - target_return}
         )
-        bounds = [(0, 1) for _ in range(n_assets)]  # No short selling
+        bounds = [(0, 1) for _ in range(n_assets)]
         initial_guess = np.array([1.0 / n_assets] * n_assets)
-        result = minimize(portfolio_volatility, initial_guess, method='SLSQP', 
-                         bounds=bounds, constraints=constraints)
-        return result
+        result = minimize(portfolio_volatility, initial_guess, method='SLSQP', bounds=bounds, constraints=constraints)
+        return result.x if result.success else None
 
-    # Compute minimum variance portfolio
+    # Compute minimum variance portfolio (one extreme point)
     def min_var_portfolio():
         constraints = {'type': 'eq', 'fun': lambda w: np.sum(w) - 1}
         bounds = [(0, 1) for _ in range(n_assets)]
         initial_guess = np.array([1.0 / n_assets] * n_assets)
-        result = minimize(portfolio_volatility, initial_guess, method='SLSQP', 
-                         bounds=bounds, constraints=constraints)
-        return result.x
+        result = minimize(portfolio_volatility, initial_guess, method='SLSQP', bounds=bounds, constraints=constraints)
+        return result.x if result.success else None
 
     min_var_weights = min_var_portfolio()
+    if min_var_weights is None:
+        print("Failed to compute minimum variance portfolio.")
+        return
     min_var_vol = portfolio_volatility(min_var_weights)
     min_var_ret = portfolio_return(min_var_weights)
 
-    # Compute maximum return portfolio (highest returning asset, no short selling)
+    # Compute maximum return portfolio (other extreme point)
     max_ret_asset = np.argmax(mean_returns)
     max_ret_vol = np.sqrt(cov_matrix.iloc[max_ret_asset, max_ret_asset])
     max_ret_ret = mean_returns[max_ret_asset]
 
-    # Generate target returns between min variance and max return
-    target_returns = np.linspace(min_var_ret, max_ret_ret, 50)
+    # Generate target returns for a smooth frontier between extremes
+    num_points = 50  # Enough points for smoothness
+    target_returns = np.linspace(min_var_ret, max_ret_ret, num_points)
 
     # Calculate efficient frontier points
-    successful_targets = []
-    frontier_volatilities = []
+    frontier_vols = []
+    frontier_rets = []
     for target in target_returns:
-        result = minimize_volatility(target)
-        if result.success:
-            vol = portfolio_volatility(result.x)
-            successful_targets.append(target)
-            frontier_volatilities.append(vol)
+        weights = minimize_volatility(target)
+        if weights is not None:
+            vol = portfolio_volatility(weights)
+            ret = portfolio_return(weights)
+            frontier_vols.append(vol)
+            frontier_rets.append(ret)
 
-    # Compute equal-weight portfolio
-    equal_weights = np.array([1.0 / n_assets] * n_assets)
-    equal_vol = portfolio_volatility(equal_weights)
-    equal_ret = portfolio_return(equal_weights)
+    # Start plotting
+    plt.figure(figsize=(14, 10))
 
-    # Plotting
-    plt.figure(figsize=(10, 6))
-    plt.plot(frontier_volatilities, successful_targets, label='Efficient Frontier', marker='o')
-    plt.scatter(np.sqrt(np.diag(cov_matrix)), mean_returns, label='Individual Assets', alpha=0.5)
-    plt.scatter(min_var_vol, min_var_ret, color='red', label='Min Variance Portfolio', s=100)
-    plt.scatter(equal_vol, equal_ret, color='green', label='Equal Weight Portfolio', s=100)
-    plt.scatter(max_ret_vol, max_ret_ret, color='blue', label='Max Return Portfolio', s=100)
-    
-    plt.xlabel('Volatility (Standard Deviation)')
-    plt.ylabel('Expected Return')
-    plt.title('Efficient Frontier')
-    plt.legend()
-    plt.grid(True)
+    # Plot individual assets
+    individual_vols = np.sqrt(np.diag(cov_matrix))
+    individual_rets = mean_returns
+    plt.scatter(individual_vols, individual_rets, color='gray', label='Individual Assets', alpha=0.5, s=30)
+
+    # Plot pre-calculated MVPs with one color per method
+    method_colors = {method: color for method, color in zip(mvp_weights_all.keys(), plt.rcParams['axes.prop_cycle'].by_key()['color'])}
+    for method in mvp_weights_all.keys():
+        vols = []
+        rets = []
+        for year in mvp_weights_all[method].keys():
+            weights = mvp_weights_all[method][year]
+            if weights.isna().all():
+                continue
+            common_assets = weights.index.intersection(simple_returns.columns)
+            if len(common_assets) < 2:
+                continue
+            weights = weights[common_assets]
+            weights /= weights.sum()  # Normalize weights
+            port_ret = portfolio_return(weights)
+            port_vol = portfolio_volatility(weights)
+            vols.append(port_vol)
+            rets.append(port_ret)
+        if vols:
+            plt.scatter(vols, rets, color=method_colors[method], label=method, marker='o', s=50)
+
+    # Plot the smooth efficient frontier
+    if frontier_vols:
+        plt.plot(frontier_vols, frontier_rets, color='black', label='Efficient Frontier', linewidth=2)
+
+    # Set limits with more zoom out (increased padding)
+    all_vols = list(individual_vols) + frontier_vols
+    all_rets = list(individual_rets) + frontier_rets
+    min_vol = min(all_vols)
+    max_vol = max(all_vols)
+    min_ret = min(all_rets)
+    max_ret = max(all_rets)
+    vol_padding = 0.3 * (max_vol - min_vol)  # Increased from 0.1 to 0.3
+    ret_padding = 0.3 * (max_ret - min_ret)  # Increased from 0.1 to 0.3
+    plt.xlim(min_vol - vol_padding, max_vol + vol_padding)
+    plt.ylim(min_ret - ret_padding, max_ret + ret_padding)
+
+    # Add labels, title, legend, and grid
+    plt.xlabel('Volatility (Standard Deviation)', fontsize=14)
+    plt.ylabel('Expected Return', fontsize=14)
+    plt.title('Efficient Frontier with Pre-Calculated MVPs', fontsize=16)
+    plt.legend(fontsize=12)
+    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.tight_layout()
     plt.show()
 
-# Call the function to plot the efficient frontier using the entire simple_returns DataFrame
-plot_efficient_frontier(simple_returns)
-
+# Call the function to plot the efficient frontier using the pre-calculated MVPs
+plot_efficient_frontier_with_precalculated_portfolios(simple_returns, mvp_weights_all)
 
 # ------------------------------
 # STEP 11 – CARBON METRICS FOR P_mv_oos
