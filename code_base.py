@@ -278,15 +278,10 @@ def compute_factor_cov_matrix(returns, factors):
 def compute_mvp_weights(returns_window, mkt_caps_window, revenues_window, rf_window, method='lw',
                         max_weight=0.05, prev_weights=None, turnover_limit=None, transaction_cost=None):
     """Compute Minimum Variance Portfolio weights using specified method (unconstrained)."""
-        # require at least 60 valid months in the window
-    min_months = 60
-    sufficient_data = returns_window.notna().sum() >= min_months  # boolean Series, indexed by asset
-
-    # keep only those assets
-    returns_window = returns_window.loc[:, sufficient_data]
-    mkt_caps_window = mkt_caps_window.loc[:, sufficient_data].reindex(returns_window.index, method='ffill')
-    revenues_window = revenues_window.loc[:, sufficient_data].reindex(returns_window.index, method='ffill')
-    rf_window = rf_window.reindex(returns_window.index, method='ffill').fillna(0)
+mask_lb = (simple_returns.index >= window_start) & (simple_returns.index <= window_end)
+window_lb = simple_returns.loc[mask_lb]
+valid_w = window_lb.notna().sum()  # count non-NA per asset
+eligible_assets = valid_w[valid_w >= 60].index.tolist()  # need ≥60 months
 
     if returns_window.shape[1] < 2:
         return pd.Series(np.nan)
@@ -781,15 +776,10 @@ def compute_mvp_weights_constrained(returns_window, mkt_caps_window, revenues_wi
                                     max_weight=0.05, prev_weights=None, turnover_limit=None, transaction_cost=None,
                                     carbon_constraint=None):
     """Compute MVP weights with carbon footprint constraint."""
-        # require at least 60 valid months in the window
-    min_months = 60
-    sufficient_data = returns_window.notna().sum() >= min_months  # boolean Series, indexed by asset
-
-    # keep only those assets
-    returns_window = returns_window.loc[:, sufficient_data]
-    mkt_caps_window = mkt_caps_window.loc[:, sufficient_data].reindex(returns_window.index, method='ffill')
-    revenues_window = revenues_window.loc[:, sufficient_data].reindex(returns_window.index, method='ffill')
-    rf_window = rf_window.reindex(returns_window.index, method='ffill').fillna(0)
+mask_lb = (simple_returns.index >= window_start) & (simple_returns.index <= window_end)
+window_lb = simple_returns.loc[mask_lb]
+valid_w = window_lb.notna().sum()  # count non-NA per asset
+eligible_assets = valid_w[valid_w >= 60].index.tolist()  # need ≥60 months
 
     if returns_window.shape[1] < 2:
         return pd.Series(np.nan)
