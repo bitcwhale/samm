@@ -276,7 +276,7 @@ def compute_factor_cov_matrix(returns, factors):
 # ------------------------------
 
 def compute_mvp_weights(returns_window, mkt_caps_window, revenues_window, rf_window, method='lw',
-                        max_weight=0.05, prev_weights=None, turnover_limit=None, transaction_cost=None):
+                        max_weight=1, prev_weights=None, turnover_limit=None, transaction_cost=None):
     """Compute Minimum Variance Portfolio weights using specified method (unconstrained)."""
     # require at least 60 valid months in the window
     min_months = 60
@@ -378,8 +378,8 @@ for method in methods:
                               (rf_series.index <= window_end)]
 
         weights = compute_mvp_weights(returns_window, mkt_caps_window, revenues_window, rf_window,
-                                      method=method, max_weight=0.05,
-                                      prev_weights=prev_weights, turnover_limit=0.3)
+                                      method=method, max_weight=1,
+                                      prev_weights=prev_weights, turnover_limit=None)
         mvp_weights[year] = weights.dropna()
         prev_weights = weights
 
@@ -675,7 +675,7 @@ def plot_efficient_frontier_with_precalculated_portfolios(simple_returns, mvp_we
     plt.show()
 
 # Call the function to plot the efficient frontier using the pre-calculated MVPs
-#plot_efficient_frontier_with_precalculated_portfolios(simple_returns, mvp_weights_all)
+plot_efficient_frontier_with_precalculated_portfolios(simple_returns, mvp_weights_all)
 
 # ------------------------------
 # STEP 11 – CARBON METRICS FOR P_mv_oos
@@ -781,7 +781,7 @@ carbon_footprints_original = carbon_footprints  # From STEP 11
 
 # Define constrained MVP function
 def compute_mvp_weights_constrained(returns_window, mkt_caps_window, revenues_window, rf_window, method='lw',
-                                    max_weight=0.05, prev_weights=None, turnover_limit=None, transaction_cost=None,
+                                    max_weight=1, prev_weights=None, turnover_limit=None, transaction_cost=None,
                                     carbon_constraint=None):
     """Compute MVP weights with carbon footprint constraint."""
     sufficient_data = returns_window.count() >= 120
@@ -846,8 +846,8 @@ for year in range(start_year, end_year + 1):
         print(f"Warning: No carbon constraint data for year {Y}")
 
     weights = compute_mvp_weights_constrained(returns_window, mkt_caps_window, revenues_window, rf_window,
-                                              method=method, max_weight=0.05,
-                                              prev_weights=prev_weights, turnover_limit=0.3,
+                                              method=method, max_weight=1,
+                                              prev_weights=prev_weights, turnover_limit=None,
                                               carbon_constraint=carbon_constraint)
     mvp_weights_constrained[year] = weights.dropna()
     prev_weights = weights
@@ -939,7 +939,7 @@ for Y in range(2013, 2023):
     benchmark_cf[Y] = cf_vw_Y
 
 def compute_tracking_weights(returns_window, mkt_caps_window, revenues_window, rf_window, vw_weights,
-                             c_vector, cf_threshold, method='lw', max_weight=0.05):
+                             c_vector, cf_threshold, method='lw', max_weight=1):
     """Compute weights minimizing tracking error with carbon constraint."""
     sufficient_data = returns_window.count() >= 120
     returns_window = returns_window.loc[:, sufficient_data].dropna(axis=1, how="any")
@@ -999,7 +999,7 @@ for year in range(start_year, end_year + 1):
     cf_threshold = 0.5 * cf_vw_Y
 
     weights = compute_tracking_weights(returns_window, mkt_caps_window, revenues_window, rf_window,
-                                       vw_weights_Y, c_Y, cf_threshold, method='lw', max_weight=0.05)
+                                       vw_weights_Y, c_Y, cf_threshold, method='lw', max_weight=1)
     tracking_weights[year] = weights.dropna()
 
 # Compute returns and metrics
@@ -1357,6 +1357,4 @@ plt.legend(["VW Portfolio", "Tracking Portfolio (50%)", "Net Zero Portfolio"])
 plt.grid(True)
 plt.tight_layout()
 plt.show()
-
-
 
