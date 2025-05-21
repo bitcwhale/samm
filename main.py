@@ -551,7 +551,7 @@ plt.title("Portfolio Performance Metrics Table", fontsize=12, pad=20)
 plt.show()
 
 # ------------------------------
-# STEP 10.5 – EFFICIENT FRONTIER PLOT USING PRE-CALCULATED PORTFOLIOS
+# STEP 11 – EFFICIENT FRONTIER PLOT USING PRE-CALCULATED PORTFOLIOS
 # ------------------------------
 
 def plot_efficient_frontier_with_precalculated_portfolios(simple_returns, mvp_weights_all):
@@ -675,7 +675,7 @@ def plot_efficient_frontier_with_precalculated_portfolios(simple_returns, mvp_we
     plt.show()
 
 # Call the function to plot the efficient frontier using the pre-calculated MVPs
-plot_efficient_frontier_with_precalculated_portfolios(simple_returns, mvp_weights_all)
+#plot_efficient_frontier_with_precalculated_portfolios(simple_returns, mvp_weights_all)
 
 # ------------------------------
 # STEP 11 – CARBON METRICS FOR P_mv_oos
@@ -705,41 +705,41 @@ revenues_annual = revenues.groupby(revenues.index.year).last()
 mkt_caps_annual = mkt_caps.groupby(mkt_caps.index.year).last()
 
 # Compute WACI and Carbon Footprint for P_mv_oos using 'lw' method
-method = 'lw'
+
+
+# ---  Step 11  ---
+method = "lw"
 carbon_footprints = {}
 waci_values = {}
 
-for Y in range(2013, 2023):
-    weights_Y_minus_1 = mvp_weights_all[method].get(Y - 1, pd.Series())
-    if weights_Y_minus_1.empty:
-        print(f"No weights available for year {Y-1}")
-        continue
-    firms_Y = weights_Y_minus_1.index
+for label_year in range(2013, 2023):            # the key in mvp_weights_all
+    invest_year = label_year + 1                # calendar year the weights are live
 
-    emissions_Y = emissions_long[emissions_long['Year'] == Y].set_index('Firm_Name')['E'].reindex(firms_Y).dropna()
-    mkt_cap_Y = mkt_caps_annual.loc[Y].reindex(firms_Y).dropna() if Y in mkt_caps_annual.index else pd.Series()
-    revenue_Y = revenues_annual.loc[Y].reindex(firms_Y).dropna() if Y in revenues_annual.index else pd.Series()
-
-    common_firms = weights_Y_minus_1.index.intersection(emissions_Y.index).intersection(mkt_cap_Y.index).intersection(revenue_Y.index)
-    if common_firms.empty:
-        print(f"No common firms for year {Y}")
+    w = mvp_weights_all[method].get(label_year, pd.Series())
+    if w.empty:
         continue
 
-    weights_Y_minus_1 = weights_Y_minus_1.reindex(common_firms)
-    emissions_Y = emissions_Y.reindex(common_firms)
-    mkt_cap_Y = mkt_cap_Y.reindex(common_firms)
-    revenue_Y = revenue_Y.reindex(common_firms)
+    # emissions / cap / revenue **of the year in which the weights are invested**
+    emis = emissions_long.loc[emissions_long['Year'] == invest_year]\
+                          .set_index('Firm_Name')['E']
+    cap  = mkt_caps_annual.loc[invest_year] if invest_year in mkt_caps_annual.index else pd.Series()
+    rev  = revenues_annual.loc[invest_year] if invest_year in revenues_annual.index else pd.Series()
 
-    # Carbon Footprint (tons CO2e per million USD invested)
-    emissions_over_mkt_cap = emissions_Y / mkt_cap_Y
-    cf_Y = (weights_Y_minus_1 * emissions_over_mkt_cap).sum()
-    carbon_footprints[Y] = cf_Y
+    common = (
+        w.index
+        .intersection(emis.index)
+        .intersection(cap.index)
+        .intersection(rev.index)
+    )
+    if common.empty:               # keep the warning you already print
+        continue
 
-    # WACI (tons CO2e per million USD of revenue)
-    revenue_Y_millions = revenue_Y / 1_000  # Convert thousands to millions
-    ci_Y = emissions_Y / revenue_Y_millions
-    waci_Y = (weights_Y_minus_1 * ci_Y).sum()
-    waci_values[Y] = waci_Y
+    w = w.reindex(common)
+    emis, cap, rev = emis[common], cap[common], rev[common]
+
+    # footprint and WACI
+    carbon_footprints[invest_year] = (w * (emis / cap)).sum()
+    waci_values[invest_year]       = (w * (emis / (rev / 1_000))).sum()
 
 # Display results
 print("\n=== Carbon Footprint for P_mv_oos (tons CO2e per million USD invested) ===")
@@ -768,14 +768,18 @@ plt.show()
 
 # Compute c_Y vectors (E_{i,Y} / Cap_{i,Y})
 c_vectors = {}
-for Y in range(2013, 2023):
-    emissions_Y = emissions_long[emissions_long['Year'] == Y].set_index('Firm_Name')['E']
-    if Y not in mkt_caps_annual.index:
+for invest_year in range(2014, 2024):           # same horizon as above
+    emis = emissions_long.loc[emissions_long['Year'] == invest_year]\
+                          .set_index('Firm_Name')['E']
+    if invest_year not in mkt_caps_annual.index:
         continue
-    mkt_cap_Y = mkt_caps_annual.loc[Y]
-    common_firms = emissions_Y.index.intersection(mkt_cap_Y.index)
-    c_Y = emissions_Y.reindex(common_firms) / mkt_cap_Y.reindex(common_firms)
-    c_vectors[Y] = c_Y.dropna()
+    cap = mkt_caps_annual.loc[invest_year]
+    common = (
+        w.index
+        .intersection(emis.index)
+        .intersection(cap.index)
+    )
+    c_vectors[invest_year] = (emis / cap).reindex(common).dropna()
 
 carbon_footprints_original = carbon_footprints  # From STEP 11
 
@@ -840,10 +844,15 @@ for year in range(start_year, end_year + 1):
     rf_window = rf_series[(rf_series.index >= window_start) &
                           (rf_series.index <= window_end)]
 
-    Y = year
-    carbon_constraint = (c_vectors[Y], 0.5 * carbon_footprints_original[Y]) if Y in c_vectors and Y in carbon_footprints_original else None
-    if carbon_constraint is None:
-        print(f"Warning: No carbon constraint data for year {Y}")
+    # --- align the carbon data with the year the weights will be LIVE ---
+    invest_year = year + 1  # weights you form now will be held Jan-Dec of this year
+    carbon_constraint = None
+    if invest_year in c_vectors and invest_year in carbon_footprints_original:
+        carbon_constraint = (c_vectors[invest_year],
+                             0.5 * carbon_footprints_original[invest_year])
+    else:
+        print(f"Warning: No carbon data for live year {invest_year}")
+
 
     weights = compute_mvp_weights_constrained(returns_window, mkt_caps_window, revenues_window, rf_window,
                                               method=method, max_weight=1,
@@ -858,19 +867,18 @@ metrics['constrained'] = compute_metrics(mvp_series_constrained, rf_aligned)
 
 # Compute carbon footprints for constrained portfolio
 carbon_footprints_constrained = {}
-for Y in range(2013, 2023):
-    weights_Y_minus_1 = mvp_weights_constrained.get(Y - 1, pd.Series())
-    if weights_Y_minus_1.empty:
+for live_year in range(2014, 2024):                      # ① loop over the year of investment
+    weights_live = mvp_weights_constrained.get(live_year - 1, pd.Series())   # weights labelled (live_year-1)
+    if weights_live.empty:
         continue
-    firms_Y = weights_Y_minus_1.index
-    c_Y = c_vectors.get(Y, pd.Series())
-    common_firms = firms_Y.intersection(c_Y.index)
-    if common_firms.empty:
+
+    c_live = c_vectors.get(live_year, pd.Series())       # emissions data of the live year
+    common = weights_live.index.intersection(c_live.index)
+    if common.empty:
         continue
-    weights_Y_minus_1 = weights_Y_minus_1.reindex(common_firms)
-    c_Y = c_Y.reindex(common_firms)
-    cf_Y = (weights_Y_minus_1 * c_Y).sum()
-    carbon_footprints_constrained[Y] = cf_Y
+
+    cf_live = (weights_live.reindex(common) * c_live.reindex(common)).sum()
+    carbon_footprints_constrained[live_year] = cf_live
 
 # Display comparison
 print("\n=== Carbon Footprint Comparison ===")
@@ -990,13 +998,17 @@ for year in range(start_year, end_year + 1):
     vw_weights_Y = compute_vw_weights(mkt_caps_annual, year)
     if vw_weights_Y.empty:
         continue
-    c_Y = c_vectors.get(year, pd.Series())
+    live_year = year + 1  # portfolio will be held Jan–Dec of this calendar year
+
+    c_Y = c_vectors.get(live_year, pd.Series())
     if c_Y.empty:
         continue
-    cf_vw_Y = benchmark_cf.get(year, np.nan)
-    if np.isnan(cf_vw_Y):
+
+    cf_vw_live = benchmark_cf.get(live_year, np.nan)
+    if np.isnan(cf_vw_live):
         continue
-    cf_threshold = 0.5 * cf_vw_Y
+
+    cf_threshold = 0.5 * cf_vw_live  # 50 % of benchmark footprint for the live year
 
     weights = compute_tracking_weights(returns_window, mkt_caps_window, revenues_window, rf_window,
                                        vw_weights_Y, c_Y, cf_threshold, method='lw', max_weight=1)
@@ -1008,19 +1020,18 @@ metrics['tracking_0.5'] = compute_metrics(tracking_series, rf_aligned)
 
 # Compute carbon footprints
 carbon_footprints_tracking = {}
-for Y in range(2013, 2023):
-    weights_Y_minus_1 = tracking_weights.get(Y - 1, pd.Series())
-    if weights_Y_minus_1.empty:
+for live_year in range(2014, 2024):
+    weights_live = tracking_weights.get(live_year - 1, pd.Series())
+    if weights_live.empty:
         continue
-    firms_Y = weights_Y_minus_1.index
-    c_Y = c_vectors.get(Y, pd.Series())
-    common_firms = firms_Y.intersection(c_Y.index)
-    if common_firms.empty:
+
+    c_live = c_vectors.get(live_year, pd.Series())
+    common = weights_live.index.intersection(c_live.index)
+    if common.empty:
         continue
-    weights_Y_minus_1 = weights_Y_minus_1.reindex(common_firms)
-    c_Y = c_Y.reindex(common_firms)
-    cf_Y = (weights_Y_minus_1 * c_Y).sum()
-    carbon_footprints_tracking[Y] = cf_Y
+
+    cf_live = (weights_live.reindex(common) * c_live.reindex(common)).sum()
+    carbon_footprints_tracking[live_year] = cf_live
 
 # Display comparison
 print("\n=== Carbon Footprint Comparison for Tracking Portfolio ===")
