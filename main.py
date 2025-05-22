@@ -1162,7 +1162,7 @@ print(f"Base Year (2013) VW Carbon Footprint: {CF_Y0_vw:.2f} tons CO2e per milli
 
 def compute_nz_target(Y, CF_Y0, theta):
     """Compute Net Zero carbon footprint target for year Y based on 2013, reduced exponentially."""
-    return CF_Y0 * (1 - theta) ** (Y - Y0)
+    return CF_Y0 * (1 - theta) ** (Y - Y0+1)
 
 # Rolling optimization for Net Zero portfolio
 nz_weights = {}
