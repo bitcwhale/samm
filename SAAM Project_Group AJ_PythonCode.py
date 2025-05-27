@@ -9,7 +9,7 @@ import cvxpy as cp
 from sklearn.decomposition import PCA
 import warnings
 
-base_url = "/Users/mattcolliss/Desktop/SAAAM/DataR/"
+base_url = "https://raw.githubusercontent.com/bitcwhale/samm/main/"
 
 warnings.simplefilter("ignore", category=RuntimeWarning)
 warnings.simplefilter("ignore", category=FutureWarning)
